@@ -44,6 +44,7 @@ object TunnelController {
         .build()
 
     private lateinit var backend: GoBackend
+    private lateinit var appContext: Context
     private var startedAt = 0L
 
     /** 串行化连接/断开/体检的入口，避免体检 finally 拆掉刚建立的连接。 */
@@ -59,8 +60,25 @@ object TunnelController {
     val state: StateFlow<VpnState> = _state.asStateFlow()
 
     fun init(context: Context) {
+        appContext = context.applicationContext
         if (!::backend.isInitialized) {
             backend = GoBackend(context.applicationContext)
+        }
+    }
+
+    /** 统一状态出口：连接成功时拉起前台保活，断开/失败时释放。 */
+    private fun updateState(newState: VpnState) {
+        if (_state.value == newState) return
+        _state.value = newState
+        if (!::appContext.isInitialized) return
+        when (newState) {
+            is VpnState.Connected -> runCatching {
+                VpnKeepAliveService.start(appContext)
+            }
+            is VpnState.Idle, is VpnState.Error -> runCatching {
+                VpnKeepAliveService.stop(appContext)
+            }
+            else -> Unit
         }
     }
 
@@ -74,11 +92,11 @@ object TunnelController {
                 when {
                     _state.value is VpnState.Connected && !running -> {
                         startedAt = 0L
-                        _state.value = VpnState.Idle
+                        updateState(VpnState.Idle)
                     }
                     _state.value is VpnState.Idle && running -> {
                         startedAt = SystemClock.elapsedRealtime()
-                        _state.value = VpnState.Connected
+                        updateState(VpnState.Connected)
                     }
                 }
             }
@@ -97,7 +115,7 @@ object TunnelController {
                 is VpnState.Disconnecting -> throw IllegalStateException("正在切换连接，请稍后再试")
                 else -> Unit
             }
-            _state.value = VpnState.Connecting
+            updateState(VpnState.Connecting)
         }
         try {
             val connectStartedAt = SystemClock.elapsedRealtime()
@@ -125,7 +143,7 @@ object TunnelController {
                 awaitRunning(false, 800L)
                 Log.d("SwiftWindSwitch", "connect dead-clean +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
                 val error = IllegalStateException("节点未响应，无法建立有效连接")
-                _state.value = VpnState.Error(mapError(error))
+                updateState(VpnState.Error(mapError(error)))
                 throw error
             }
             // 握手成功也不代表能上网：再做一次极小的 HTTPS 请求确认数据面。
@@ -138,11 +156,11 @@ object TunnelController {
                 runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
                 awaitRunning(false, 800L)
                 val error = IllegalStateException("节点握手成功，但无法传输数据")
-                _state.value = VpnState.Error(mapError(error))
+                updateState(VpnState.Error(mapError(error)))
                 throw error
             }
             startedAt = SystemClock.elapsedRealtime()
-            _state.value = VpnState.Connected
+            updateState(VpnState.Connected)
             Log.d("SwiftWindSwitch", "connect done +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
         } catch (t: Throwable) {
             if (_state.value is VpnState.Error) throw t
@@ -153,9 +171,9 @@ object TunnelController {
             }.getOrDefault(false)
             if (stillRunning) {
                 if (startedAt == 0L) startedAt = SystemClock.elapsedRealtime()
-                _state.value = VpnState.Connected
+                updateState(VpnState.Connected)
             } else {
-                _state.value = VpnState.Error(mapError(t))
+                updateState(VpnState.Error(mapError(t)))
             }
             throw t
         }
@@ -221,7 +239,7 @@ object TunnelController {
             if (_state.value is VpnState.Connecting) {
                 throw IllegalStateException("正在连接，请稍后再断开")
             }
-            _state.value = VpnState.Disconnecting
+            updateState(VpnState.Disconnecting)
         }
         var stopped = true
         try {
@@ -234,10 +252,10 @@ object TunnelController {
         }
         if (stopped) {
             startedAt = 0L
-            _state.value = VpnState.Idle
+            updateState(VpnState.Idle)
         } else {
             // 不能把“DOWN 超时但隧道仍在运行”报成未连接，否则界面关了、VPN 还在。
-            _state.value = VpnState.Connected
+            updateState(VpnState.Connected)
             throw IllegalStateException("无法关闭 VPN 隧道，请重试")
         }
     }

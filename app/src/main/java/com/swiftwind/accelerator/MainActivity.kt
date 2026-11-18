@@ -1,7 +1,10 @@
 package com.swiftwind.accelerator
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -23,6 +26,8 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: AppViewModel by viewModels()
     private lateinit var vpnPermissionLauncher: ActivityResultLauncher<Intent>
+    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private var afterNotificationPermission: (() -> Unit)? = null
     private var pendingProbe = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,6 +50,14 @@ class MainActivity : ComponentActivity() {
                 pendingProbe = false
                 Toast.makeText(this, "未授权系统 VPN，无法建立连接", Toast.LENGTH_SHORT).show()
             }
+        }
+
+        notificationPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) {
+            // 即使拒绝通知权限，也不阻断连接；只是前台服务的通知不会展示。
+            afterNotificationPermission?.invoke()
+            afterNotificationPermission = null
         }
 
         setContent {
@@ -72,14 +85,31 @@ class MainActivity : ComponentActivity() {
             is VpnState.Connecting,
             is VpnState.Disconnecting -> Unit
             else -> {
-                val intent = VpnService.prepare(this)
-                if (intent != null) {
-                    vpnPermissionLauncher.launch(intent)
-                } else {
-                    pendingProbe = false
-                    viewModel.connect()
-                }
+                ensureNotificationPermission { requestVpnAndConnect() }
             }
+        }
+    }
+
+    private fun ensureNotificationPermission(then: () -> Unit) {
+        if (Build.VERSION.SDK_INT < 33 ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            then()
+            return
+        }
+        afterNotificationPermission = then
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private fun requestVpnAndConnect() {
+        val intent = VpnService.prepare(this)
+        if (intent != null) {
+            pendingProbe = false
+            vpnPermissionLauncher.launch(intent)
+        } else {
+            pendingProbe = false
+            viewModel.connect()
         }
     }
 

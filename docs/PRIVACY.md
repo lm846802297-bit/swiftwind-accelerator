@@ -26,6 +26,8 @@
 
 - `INTERNET`：注册 WARP、拉取订阅、建立隧道。
 - `ACCESS_NETWORK_STATE`：监听网络切换，用于断网恢复后自动重连。
+- `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_SPECIAL_USE`：连接期间保持 VPN 前台服务，降低 Android 在后台回收进程的概率。
+- `POST_NOTIFICATIONS`：展示“VPN 已连接，网络保护中”的前台服务状态通知。拒绝该权限不影响连接，只是不显示该通知。
 - VPN 授权由 Android 系统弹窗授予；应用不会自行绕过。
 
 ## 用户控制

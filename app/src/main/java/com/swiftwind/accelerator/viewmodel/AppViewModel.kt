@@ -417,28 +417,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             "switch target failed +${SystemClock.elapsedRealtime() - switchStartedAt}ms: $originalError"
                         )
                         // 切换会先拆掉旧隧道；新节点握手失败时尽量把原节点接回来，
-                        // 避免用户点错一个死节点后直接断网。
+                        // 避免用户点错一个死节点后直接断网。原节点也失效时，
+                        // 再按健康度尝试少量备用线路，而不是把用户留在断网状态。
                         if (previous != null &&
                             previous.id != id &&
                             TunnelController.state.value is VpnState.Error
                         ) {
-                            val restored = runCatching {
-                                TunnelController.connect(
-                                    previous.config,
-                                    verifyData = false,
-                                    handshakeTimeoutMs = 1200L
-                                )
-                            }
-                            if (restored.isSuccess) {
-                                markHealthy(previous.id)
+                            val restoredNode = restoreAfterSwitchFailure(previous, id)
+                            if (restoredNode != null) {
+                                NodeStore.selectedId = restoredNode.id
+                                _ui.update { it.copy(selectedId = restoredNode.id) }
+                                markHealthy(restoredNode.id)
                                 Log.d(
                                     "SwiftWindSwitch",
-                                    "switch rollback +${SystemClock.elapsedRealtime() - switchStartedAt}ms"
+                                    "switch rollback +${SystemClock.elapsedRealtime() - switchStartedAt}ms -> ${restoredNode.name}"
                                 )
-                                notify("切换失败，已恢复“${previous.name}”")
+                                if (restoredNode.id == previous.id) {
+                                    notify("切换失败，已恢复“${previous.name}”")
+                                } else {
+                                    notify("切换失败，已切换到“${restoredNode.name}”")
+                                }
                             } else {
                                 markUnhealthy(previous.id)
-                                notify("$originalError；原节点恢复失败，请重新连接")
+                                notify("$originalError；备用线路也不可用，请重新连接")
                             }
                         } else {
                             notify(originalError)
@@ -572,6 +573,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }.thenByDescending { quality[it.id]?.score ?: 0 }
             )
             .take(MAX_FAILOVER_CANDIDATES)
+    }
+
+    /**
+     * 切换失败后的恢复顺序：原节点优先，其次按健康度/质量分尝试少量 WARP 备用线。
+     * 恢复阶段不再做完整 HTTP 验证，避免用户为一次误点等待过久；失败则继续下一个。
+     */
+    private suspend fun restoreAfterSwitchFailure(previous: Node, failedTargetId: String): Node? {
+        val attempted = mutableSetOf(previous.id, failedTargetId)
+        val candidates = buildList {
+            add(previous)
+            addAll(failoverCandidates(previous, attempted))
+        }.distinctBy { it.id }.take(MAX_FAILOVER_CANDIDATES)
+        for (candidate in candidates) {
+            try {
+                TunnelController.connect(
+                    candidate.config,
+                    verifyData = false,
+                    handshakeTimeoutMs = 1500L
+                )
+                return candidate
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                markUnhealthy(candidate.id)
+                Log.d("SwiftWindSwitch", "switch rollback candidate failed: ${candidate.name}")
+            }
+        }
+        return null
     }
 
     private fun startNetworkMonitoring() {
