@@ -64,6 +64,7 @@ import com.swiftwind.accelerator.ui.theme.Surface as SurfaceColor
 import com.swiftwind.accelerator.ui.theme.SurfaceHi
 import com.swiftwind.accelerator.ui.theme.TextPrimary
 import com.swiftwind.accelerator.ui.theme.TextSecondary
+import com.swiftwind.accelerator.viewmodel.ProbeProgress
 import com.swiftwind.accelerator.viewmodel.UiState
 
 @Composable
@@ -74,11 +75,13 @@ fun NodesScreen(
     onDelete: (String) -> Unit,
     onImportText: (String) -> Unit,
     onAddSubscription: (String) -> Unit,
-    onProbe: () -> Unit
+    onProbe: () -> Unit,
+    onCancelProbe: () -> Unit
 ) {
     var showImport by remember { mutableStateOf(false) }
     var showSubscription by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<Node?>(null) }
+    val probeProgress = ui.probeProgress
 
     Column(
         Modifier
@@ -126,11 +129,19 @@ fun NodesScreen(
                     )
                 }
                 Text(
-                    if (ui.busy) "体检中" else "一键体检",
+                    when {
+                        probeProgress != null -> "体检中"
+                        ui.busy -> "处理中"
+                        else -> "一键体检"
+                    },
                     color = if (ui.nodes.isEmpty()) TextSecondary else Mint,
                     modifier = Modifier.padding(start = 5.dp)
                 )
             }
+        }
+        if (probeProgress != null) {
+            Spacer(Modifier.height(8.dp))
+            ProbeProgressCard(progress = probeProgress, onCancel = onCancelProbe)
         }
         Spacer(Modifier.height(10.dp))
 
@@ -269,6 +280,49 @@ fun NodesScreen(
                 TextButton(onClick = { pendingDelete = null }) { Text("取消") }
             }
         )
+    }
+}
+
+@Composable
+private fun ProbeProgressCard(progress: ProbeProgress, onCancel: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF10251F), RoundedCornerShape(16.dp))
+            .border(1.dp, Mint.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(18.dp),
+            strokeWidth = 2.dp,
+            color = Mint
+        )
+        Column(Modifier.weight(1f).padding(start = 11.dp)) {
+            Text(
+                if (progress.cancelling) "正在取消体检…" else "正在体检 ${progress.done}/${progress.total}",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary
+            )
+            Text(
+                when {
+                    progress.cancelling -> "等待当前线路结束"
+                    progress.currentName.isNotBlank() ->
+                        "当前 ${progress.currentName} · 已可用 ${progress.available}"
+                    else -> "准备中…"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        TextButton(onClick = onCancel, enabled = !progress.cancelling) {
+            Text(
+                if (progress.cancelling) "取消中" else "取消",
+                color = if (progress.cancelling) TextSecondary else Mint
+            )
+        }
     }
 }
 

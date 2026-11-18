@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
@@ -19,12 +21,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.swiftwind.accelerator.ui.screens.HomeScreen
 import com.swiftwind.accelerator.ui.screens.NodesScreen
 import com.swiftwind.accelerator.ui.screens.SettingsScreen
 import com.swiftwind.accelerator.ui.theme.Deep
 import com.swiftwind.accelerator.ui.theme.Ink
+import com.swiftwind.accelerator.ui.theme.Mint
+import com.swiftwind.accelerator.ui.theme.TextPrimary
 import com.swiftwind.accelerator.viewmodel.AppViewModel
 import com.swiftwind.accelerator.viewmodel.UiState
 
@@ -72,7 +77,8 @@ fun SwiftWindApp(
                             onDelete = viewModel::deleteNode,
                             onImportText = viewModel::importText,
                             onAddSubscription = viewModel::addSubscription,
-                            onProbe = onProbeNodes
+                            onProbe = onProbeNodes,
+                            onCancelProbe = viewModel::cancelProbe
                         )
                         else -> SettingsScreen(
                             ui = ui,
@@ -86,7 +92,15 @@ fun SwiftWindApp(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(horizontal = 20.dp, vertical = 12.dp)
-                )
+                ) { data ->
+                    Snackbar(
+                        snackbarData = data,
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = Color(0xFF10251F),
+                        contentColor = TextPrimary,
+                        actionColor = Mint
+                    )
+                }
             }
             BottomBar(current = tab, onSelect = { tab = it })
         }

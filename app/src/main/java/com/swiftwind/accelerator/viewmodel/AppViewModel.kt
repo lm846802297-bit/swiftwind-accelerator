@@ -15,9 +15,11 @@ import com.swiftwind.accelerator.vpn.TunnelStats
 import com.swiftwind.accelerator.vpn.VpnState
 import com.swiftwind.accelerator.vpn.NodeHealth
 import com.swiftwind.accelerator.vpn.NodeQuality
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -29,6 +31,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+data class ProbeProgress(
+    val done: Int = 0,
+    val total: Int = 0,
+    val currentName: String = "",
+    val available: Int = 0,
+    val cancelling: Boolean = false
+)
+
 data class UiState(
     val nodes: List<Node> = emptyList(),
     val selectedId: String? = null,
@@ -36,7 +46,8 @@ data class UiState(
     val stats: TunnelStats = TunnelStats(),
     val busy: Boolean = false,
     val health: Map<String, NodeHealth> = emptyMap(),
-    val quality: Map<String, NodeQuality> = emptyMap()
+    val quality: Map<String, NodeQuality> = emptyMap(),
+    val probeProgress: ProbeProgress? = null
 ) {
     val selectedNode: Node?
         get() = nodes.firstOrNull { it.id == selectedId }
@@ -53,6 +64,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     private var statsJob: Job? = null
+    private var probeJob: Job? = null
 
     init {
         val nodes = NodeStore.loadNodes()
@@ -134,13 +146,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun probeNodes() {
-        if (_ui.value.busy) return
+        if (_ui.value.busy || probeJob?.isActive == true) return
         val nodes = _ui.value.nodes
         if (nodes.isEmpty()) {
             notify("请先添加节点")
             return
         }
-        when (_ui.value.vpnState) {
+        when (TunnelController.state.value) {
             is VpnState.Connected,
             is VpnState.Connecting,
             is VpnState.Disconnecting -> {
@@ -150,73 +162,112 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             else -> Unit
         }
 
-        viewModelScope.launch {
+        probeJob = viewModelScope.launch {
+            val total = nodes.size
             _ui.update {
                 it.copy(
                     busy = true,
+                    probeProgress = ProbeProgress(total = total),
                     health = it.nodes.associate { node -> node.id to NodeHealth.CHECKING },
                     quality = emptyMap()
                 )
             }
             var available = 0
             var firstError: String? = null
-            for (node in nodes) {
-                val result = try {
-                    TunnelController.probe(node.config, timeoutMs = 3000L)
-                } catch (t: Throwable) {
-                    if (firstError == null) firstError = TunnelController.mapError(t)
-                    null
+            try {
+                for ((index, node) in nodes.withIndex()) {
+                    ensureActive()
+                    _ui.update { state ->
+                        val progress = state.probeProgress ?: ProbeProgress(total = total)
+                        state.copy(
+                            probeProgress = progress.copy(
+                                done = index + 1,
+                                currentName = node.name,
+                                available = available
+                            )
+                        )
+                    }
+                    val result = try {
+                        TunnelController.probe(node.config, timeoutMs = 3000L)
+                    } catch (t: Throwable) {
+                        if (t is CancellationException) throw t
+                        if (firstError == null) firstError = TunnelController.mapError(t)
+                        null
+                    }
+                    val success = result?.healthy == true
+                    if (success) available++
+                    if (result != null) {
+                        Log.d(
+                            "SwiftWindQuality",
+                            "${node.name} ${node.endpoint} healthy=${result.healthy} " +
+                                "score=${result.score} handshake=${result.handshakeMs}ms " +
+                                "http=${result.httpLatencyMs}ms throughput=${result.throughputKbps}kbps"
+                        )
+                    }
+                    _ui.update { state ->
+                        val progress = state.probeProgress ?: ProbeProgress(total = total)
+                        state.copy(
+                            health = state.health + (node.id to if (success) NodeHealth.OK else NodeHealth.FAIL),
+                            quality = if (result != null) {
+                                state.quality + (node.id to result.toQuality())
+                            } else {
+                                state.quality
+                            },
+                            probeProgress = progress.copy(
+                                done = index + 1,
+                                currentName = node.name,
+                                available = available
+                            )
+                        )
+                    }
+                    delay(300)
                 }
-                val success = result?.healthy == true
-                if (success) available++
-                if (result != null) {
+                ensureActive()
+                val finalHealth = _ui.value.health
+                val finalQuality = _ui.value.quality
+                val currentNodes = _ui.value.nodes
+                val best = currentNodes
+                    .filter { finalHealth[it.id] == NodeHealth.OK }
+                    .maxByOrNull { finalQuality[it.id]?.score ?: 0 }
+                val currentSelected = _ui.value.selectedId
+                if (best != null && best.id != currentSelected) {
+                    NodeStore.selectedId = best.id
+                    _ui.update { it.copy(selectedId = best.id) }
+                }
+                if (best != null) {
                     Log.d(
                         "SwiftWindQuality",
-                        "${node.name} ${node.endpoint} healthy=${result.healthy} " +
-                            "score=${result.score} handshake=${result.handshakeMs}ms " +
-                            "http=${result.httpLatencyMs}ms throughput=${result.throughputKbps}kbps"
+                        "best=${best.name} ${best.endpoint} score=${finalQuality[best.id]?.score}"
                     )
                 }
-                _ui.update {
-                    it.copy(
-                        health = it.health + (node.id to if (success) NodeHealth.OK else NodeHealth.FAIL),
-                        quality = if (result != null) {
-                            it.quality + (node.id to result.toQuality())
-                        } else {
-                            it.quality
-                        }
-                    )
+                if (available == 0 && firstError != null) {
+                    notify("体检失败：$firstError")
+                } else if (best != null) {
+                    val quality = finalQuality[best.id]
+                    val detail = quality?.summary?.let { "（$it）" } ?: ""
+                    notify("体检完成：$available/${nodes.size} 条线路可用，已选择最优 ${best.name}$detail")
+                } else {
+                    notify("体检完成：$available/${nodes.size} 条线路可用")
                 }
-                delay(300)
-            }
-            val finalHealth = _ui.value.health
-            val finalQuality = _ui.value.quality
-            val currentNodes = _ui.value.nodes
-            val best = currentNodes
-                .filter { finalHealth[it.id] == NodeHealth.OK }
-                .maxByOrNull { finalQuality[it.id]?.score ?: 0 }
-            val currentSelected = _ui.value.selectedId
-            if (best != null && best.id != currentSelected) {
-                NodeStore.selectedId = best.id
-                _ui.update { it.copy(selectedId = best.id) }
-            }
-            if (best != null) {
-                Log.d(
-                    "SwiftWindQuality",
-                    "best=${best.name} ${best.endpoint} score=${finalQuality[best.id]?.score}"
-                )
-            }
-            _ui.update { it.copy(busy = false) }
-            if (available == 0 && firstError != null) {
-                notify("体检失败：$firstError")
-            } else if (best != null) {
-                val quality = finalQuality[best.id]
-                val detail = quality?.summary?.let { "（$it）" } ?: ""
-                notify("体检完成：$available/${nodes.size} 条线路可用，已选择最优 ${best.name}$detail")
-            } else {
-                notify("体检完成：$available/${nodes.size} 条线路可用")
+            } catch (t: CancellationException) {
+                notify("已取消体检")
+                throw t
+            } catch (t: Throwable) {
+                notify("体检异常：${TunnelController.mapError(t)}")
+            } finally {
+                _ui.update { it.copy(busy = false, probeProgress = null) }
+                probeJob = null
             }
         }
+    }
+
+    fun cancelProbe() {
+        val job = probeJob ?: return
+        if (job.isCompleted) return
+        _ui.update { state ->
+            state.copy(probeProgress = state.probeProgress?.copy(cancelling = true))
+        }
+        job.cancel()
     }
 
     fun importText(raw: String) {

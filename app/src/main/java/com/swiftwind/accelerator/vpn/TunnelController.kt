@@ -22,11 +22,11 @@ import java.util.concurrent.TimeUnit
 
 object TunnelController {
     private const val TUNNEL_NAME = "swiftwind"
-    private const val SPEED_TEST_URL = "https://speed.cloudflare.com/__down?bytes=32768"
+    private const val SPEED_TEST_URL = "https://speed.cloudflare.com/__down?bytes=262144"
     private val speedClient = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(3, TimeUnit.SECONDS)
-        .callTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .callTimeout(8, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .build()
 
@@ -167,8 +167,9 @@ object TunnelController {
     }
 
     /**
-     * 隧道内下载一个小文件，返回（首字节延迟 ms，吞吐 kbps）。
-     * 测速失败不影响可用性判断，只会在质量分里扣掉吞吐部分。
+     * 隧道内下载 256KB 样本，返回（首字节延迟 ms，吞吐 kbps）。
+     * 吞吐从收到首个响应字节开始计时，避免把 TLS/TTFB 算进下载速度；
+     * 超时导致的半截样本仍按已收字节计算，测速失败只扣吞吐分。
      */
     private fun measureSpeed(): Pair<Long, Int> {
         val started = SystemClock.elapsedRealtime()
@@ -180,18 +181,32 @@ object TunnelController {
             speedClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@use 0L to 0
                 val body = response.body ?: return@use 0L to 0
-                val httpLatencyMs = SystemClock.elapsedRealtime() - started
+                val httpLatencyMs = (SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
+                var firstByteAt = 0L
                 var totalBytes = 0L
                 val buffer = ByteArray(8192)
-                body.byteStream().use { input ->
+                val input = body.byteStream()
+                try {
                     while (true) {
-                        val read = input.read(buffer)
+                        val read = try {
+                            input.read(buffer)
+                        } catch (_: IOException) {
+                            break
+                        }
                         if (read <= 0) break
+                        if (firstByteAt == 0L) firstByteAt = SystemClock.elapsedRealtime()
                         totalBytes += read
                     }
+                } finally {
+                    runCatching { input.close() }
                 }
-                val totalMs = (SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
-                val kbps = (totalBytes * 8L / totalMs).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                val lastByteAt = SystemClock.elapsedRealtime()
+                val bodyMs = if (firstByteAt > 0L) {
+                    (lastByteAt - firstByteAt).coerceAtLeast(1L)
+                } else {
+                    1L
+                }
+                val kbps = (totalBytes * 8L / bodyMs).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                 httpLatencyMs to kbps
             }
         }.getOrDefault(0L to 0)

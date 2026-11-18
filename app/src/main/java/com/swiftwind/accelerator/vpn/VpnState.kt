@@ -16,7 +16,7 @@ enum class NodeHealth { UNKNOWN, CHECKING, OK, FAIL }
  * 一次真机体检的结果。
  * handshakeMs：从拉起隧道到检测到 WireGuard 握手的耗时；
  * httpLatencyMs：隧道内首个 HTTPS 响应头的耗时；
- * throughputKbps：隧道内 32KB 下载的实测吞吐，单位 kbps。
+ * throughputKbps：隧道内 256KB 下载的实测吞吐（从首字节开始计时），单位 kbps。
  */
 data class ProbeResult(
     val healthy: Boolean,
