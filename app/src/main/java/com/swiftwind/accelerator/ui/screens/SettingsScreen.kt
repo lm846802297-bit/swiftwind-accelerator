@@ -37,7 +37,8 @@ import androidx.compose.ui.unit.dp
 import com.swiftwind.accelerator.BuildConfig
 import com.swiftwind.accelerator.R
 import com.swiftwind.accelerator.ui.GlassCard
-import com.swiftwind.accelerator.ui.theme.Mint
+import com.swiftwind.accelerator.ui.theme.Pink
+import com.swiftwind.accelerator.ui.theme.Rose
 import com.swiftwind.accelerator.ui.theme.Stroke
 import com.swiftwind.accelerator.ui.theme.TextPrimary
 import com.swiftwind.accelerator.ui.theme.TextSecondary
@@ -140,7 +141,7 @@ private fun SectionLabel(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.labelLarge,
-        color = TextSecondary
+        color = Rose.copy(alpha = 0.80f)
     )
 }
 
@@ -163,10 +164,10 @@ private fun SettingRow(
         Box(
             Modifier
                 .size(34.dp)
-                .background(Mint.copy(alpha = 0.09f), CircleShape),
+                .background(Pink.copy(alpha = 0.10f), CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, contentDescription = null, tint = Mint.copy(alpha = 0.85f), modifier = Modifier.size(18.dp))
+            Icon(icon, contentDescription = null, tint = Pink.copy(alpha = 0.90f), modifier = Modifier.size(18.dp))
         }
         Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, color = TextPrimary)

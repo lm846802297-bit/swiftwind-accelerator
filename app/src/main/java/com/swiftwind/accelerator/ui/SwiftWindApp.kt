@@ -28,7 +28,7 @@ import com.swiftwind.accelerator.ui.screens.NodesScreen
 import com.swiftwind.accelerator.ui.screens.SettingsScreen
 import com.swiftwind.accelerator.ui.theme.Deep
 import com.swiftwind.accelerator.ui.theme.Ink
-import com.swiftwind.accelerator.ui.theme.Mint
+import com.swiftwind.accelerator.ui.theme.Pink
 import com.swiftwind.accelerator.ui.theme.TextPrimary
 import com.swiftwind.accelerator.viewmodel.AppViewModel
 import com.swiftwind.accelerator.viewmodel.UiState
@@ -53,7 +53,7 @@ fun SwiftWindApp(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(Ink, Deep, Ink)
+                    listOf(Color(0xFF2B102B), Ink, Deep, Ink)
                 )
             )
     ) {
@@ -96,9 +96,9 @@ fun SwiftWindApp(
                     Snackbar(
                         snackbarData = data,
                         shape = RoundedCornerShape(16.dp),
-                        containerColor = Color(0xFF10251F),
+                        containerColor = Color(0xFF26122D),
                         contentColor = TextPrimary,
-                        actionColor = Mint
+                        actionColor = Pink
                     )
                 }
             }

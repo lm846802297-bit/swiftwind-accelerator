@@ -24,8 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.LocalFlorist
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -49,10 +49,11 @@ import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.ui.GlassCard
 import com.swiftwind.accelerator.ui.theme.Danger
 import com.swiftwind.accelerator.ui.theme.Mint
-import com.swiftwind.accelerator.ui.theme.MintDeep
+import com.swiftwind.accelerator.ui.theme.Pink
+import com.swiftwind.accelerator.ui.theme.PinkDeep
+import com.swiftwind.accelerator.ui.theme.Rose
 import com.swiftwind.accelerator.ui.theme.Sky
 import com.swiftwind.accelerator.ui.theme.Stroke
-import com.swiftwind.accelerator.ui.theme.SurfaceHi
 import com.swiftwind.accelerator.ui.theme.TextPrimary
 import com.swiftwind.accelerator.ui.theme.TextSecondary
 import com.swiftwind.accelerator.util.formatBytes
@@ -119,10 +120,10 @@ private fun Header(state: VpnState) {
             Modifier
                 .size(44.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(Brush.linearGradient(listOf(Mint.copy(alpha = 0.9f), Sky.copy(alpha = 0.7f)))),
+                .background(Brush.linearGradient(listOf(Pink, Rose))),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Rounded.Bolt, contentDescription = null, tint = Color(0xFF04121A), modifier = Modifier.size(25.dp))
+            Icon(Icons.Rounded.LocalFlorist, contentDescription = null, tint = Color(0xFF2A0B1B), modifier = Modifier.size(25.dp))
         }
         Column(Modifier.padding(start = 12.dp).weight(1f)) {
             Text(
@@ -131,9 +132,9 @@ private fun Header(state: VpnState) {
                 color = TextPrimary
             )
             Text(
-                "HUAYI · WIREGUARD",
+                "HUAYI · STAGE",
                 style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.2.sp, fontSize = 9.sp),
-                color = Mint.copy(alpha = 0.75f)
+                color = Rose.copy(alpha = 0.85f)
             )
         }
         StatusPill(state)
@@ -152,7 +153,7 @@ private fun StatusPill(state: VpnState) {
     Row(
         Modifier
             .clip(CircleShape)
-            .background(Color(0xFF111C2B))
+            .background(Color(0xFF24122B))
             .padding(horizontal = 11.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -196,8 +197,8 @@ private fun NodeSelector(node: Node?, onClick: () -> Unit) {
                     )
                 }
             }
-            Text("切换", style = MaterialTheme.typography.labelLarge, color = Mint)
-            Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Mint, modifier = Modifier.size(18.dp))
+            Text("切换", style = MaterialTheme.typography.labelLarge, color = Pink)
+            Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Pink, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -223,7 +224,7 @@ private fun ConnectOrb(state: VpnState, enabled: Boolean, onClick: () -> Unit) {
                 repeat(3) { index ->
                     val phase = (pulse + index / 3f) % 1f
                     drawCircle(
-                        color = Mint.copy(alpha = (1f - phase) * 0.20f),
+                        color = Pink.copy(alpha = (1f - phase) * 0.22f),
                         radius = base * (0.60f + 0.40f * phase),
                         style = Stroke(width = 1.3.dp.toPx())
                     )
@@ -237,7 +238,7 @@ private fun ConnectOrb(state: VpnState, enabled: Boolean, onClick: () -> Unit) {
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
-                        listOf(Mint.copy(alpha = 0.13f), Color.Transparent)
+                        listOf(Pink.copy(alpha = 0.17f), Color.Transparent)
                     )
                 )
         )
@@ -248,9 +249,9 @@ private fun ConnectOrb(state: VpnState, enabled: Boolean, onClick: () -> Unit) {
                 .clip(CircleShape)
                 .background(
                     if (active) {
-                        Brush.linearGradient(listOf(Mint, MintDeep))
+                        Brush.linearGradient(listOf(Pink, PinkDeep))
                     } else {
-                        Brush.linearGradient(listOf(Color(0xFF1F3148), Color(0xFF0D1724)))
+                        Brush.linearGradient(listOf(Color(0xFF2C1832), Color(0xFF160C1D)))
                     }
                 )
                 .alpha(if (enabled) 1f else 0.55f)
@@ -261,7 +262,7 @@ private fun ConnectOrb(state: VpnState, enabled: Boolean, onClick: () -> Unit) {
                 Icon(
                     Icons.Rounded.PowerSettingsNew,
                     contentDescription = if (active) "断开连接" else "连接",
-                    tint = if (active) Color(0xFF03211A) else TextPrimary,
+                    tint = if (active) Color(0xFF2A0B1B) else TextPrimary,
                     modifier = Modifier.size(52.dp)
                 )
                 Spacer(Modifier.height(6.dp))
@@ -273,7 +274,7 @@ private fun ConnectOrb(state: VpnState, enabled: Boolean, onClick: () -> Unit) {
                         else -> "连接"
                     },
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (active) Color(0xFF03211A) else TextPrimary.copy(alpha = 0.85f)
+                    color = if (active) Color(0xFF2A0B1B) else TextPrimary.copy(alpha = 0.85f)
                 )
             }
         }

@@ -57,7 +57,8 @@ import com.swiftwind.accelerator.data.NodeSource
 import com.swiftwind.accelerator.vpn.NodeHealth
 import com.swiftwind.accelerator.ui.theme.Danger
 import com.swiftwind.accelerator.ui.theme.Mint
-import com.swiftwind.accelerator.ui.theme.MintDeep
+import com.swiftwind.accelerator.ui.theme.Pink
+import com.swiftwind.accelerator.ui.theme.Rose
 import com.swiftwind.accelerator.ui.theme.Sky
 import com.swiftwind.accelerator.ui.theme.Stroke
 import com.swiftwind.accelerator.ui.theme.Surface as SurfaceColor
@@ -122,13 +123,13 @@ fun NodesScreen(
                     CircularProgressIndicator(
                         modifier = Modifier.size(14.dp),
                         strokeWidth = 2.dp,
-                        color = Mint
+                        color = Pink
                     )
                 } else {
                     Icon(
                         Icons.Rounded.Speed,
                         contentDescription = null,
-                        tint = Mint,
+                        tint = Pink,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -138,7 +139,7 @@ fun NodesScreen(
                         ui.busy -> "处理中"
                         else -> "一键体检"
                     },
-                    color = if (ui.nodes.isEmpty()) TextSecondary else Mint,
+                    color = if (ui.nodes.isEmpty()) TextSecondary else Pink,
                     modifier = Modifier.padding(start = 5.dp)
                 )
             }
@@ -292,15 +293,15 @@ private fun ProbeProgressCard(progress: ProbeProgress, onCancel: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color(0xFF10251F), RoundedCornerShape(16.dp))
-            .border(1.dp, Mint.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
+            .background(Color(0xFF241227), RoundedCornerShape(16.dp))
+            .border(1.dp, Pink.copy(alpha = 0.20f), RoundedCornerShape(16.dp))
             .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         CircularProgressIndicator(
             modifier = Modifier.size(18.dp),
             strokeWidth = 2.dp,
-            color = Mint
+            color = Pink
         )
         Column(Modifier.weight(1f).padding(start = 11.dp)) {
             Text(
@@ -324,7 +325,7 @@ private fun ProbeProgressCard(progress: ProbeProgress, onCancel: () -> Unit) {
         TextButton(onClick = onCancel, enabled = !progress.cancelling) {
             Text(
                 if (progress.cancelling) "取消中" else "取消",
-                color = if (progress.cancelling) TextSecondary else Mint
+                color = if (progress.cancelling) TextSecondary else Pink
             )
         }
     }
@@ -337,34 +338,30 @@ private fun WarpCard(busy: Boolean, onFetch: () -> Unit) {
             .fillMaxWidth()
             .background(
                 Brush.linearGradient(
-                    listOf(Color(0xFF10251F), Color(0xFF0E1B2A))
+                    listOf(Color(0xFF2A1027), Color(0xFF1A0E20))
                 ),
                 RoundedCornerShape(24.dp)
             )
-            .border(1.dp, Mint.copy(alpha = 0.18f), RoundedCornerShape(24.dp))
+            .border(1.dp, Pink.copy(alpha = 0.22f), RoundedCornerShape(24.dp))
             .padding(18.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
                     .size(48.dp)
-                    .background(Mint.copy(alpha = 0.12f), RoundedCornerShape(15.dp)),
+                    .background(Pink.copy(alpha = 0.12f), RoundedCornerShape(15.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Rounded.CloudDownload, contentDescription = null, tint = Mint, modifier = Modifier.size(26.dp))
+                Icon(Icons.Rounded.CloudDownload, contentDescription = null, tint = Pink, modifier = Modifier.size(26.dp))
             }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Cloudflare WARP", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
-                    Text(
-                        "  免费",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = Mint,
-                        modifier = Modifier
-                            .background(Mint.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
+                Text(
+                    "Cloudflare WARP",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 Text(
                     "官方免费 · 一键生成多出口线路",
                     style = MaterialTheme.typography.bodyMedium,
@@ -377,8 +374,8 @@ private fun WarpCard(busy: Boolean, onFetch: () -> Unit) {
                 enabled = !busy,
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Mint,
-                    contentColor = Color(0xFF03211A)
+                    containerColor = Pink,
+                    contentColor = Color(0xFF2A0B1B)
                 ),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp)
             ) {
@@ -386,7 +383,7 @@ private fun WarpCard(busy: Boolean, onFetch: () -> Unit) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp,
-                        color = Color(0xFF03211A)
+                        color = Color(0xFF2A0B1B)
                     )
                 } else {
                     Text("获取", fontWeight = FontWeight.SemiBold)
@@ -414,7 +411,7 @@ private fun NodeRow(
         color = if (selected) SurfaceHi.copy(alpha = 0.9f) else SurfaceColor.copy(alpha = 0.6f),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            if (selected) Mint.copy(alpha = 0.35f) else Stroke
+            if (selected) Pink.copy(alpha = 0.38f) else Stroke
         )
     ) {
         Row(
@@ -424,11 +421,11 @@ private fun NodeRow(
             Box(
                 Modifier
                     .size(20.dp)
-                    .border(1.dp, if (selected) Mint else TextSecondary.copy(alpha = 0.5f), CircleShape),
+                    .border(1.dp, if (selected) Pink else TextSecondary.copy(alpha = 0.5f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 if (selected) {
-                    Box(Modifier.size(10.dp).background(Mint, CircleShape))
+                    Box(Modifier.size(10.dp).background(Pink, CircleShape))
                 }
             }
             Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
@@ -488,7 +485,7 @@ private fun HealthBadge(health: NodeHealth) {
 @Composable
 private fun SourceChip(source: NodeSource) {
     val (label, color) = when (source) {
-        NodeSource.WARP -> "免费" to Mint
+        NodeSource.WARP -> "免费" to Pink
         NodeSource.SUBSCRIPTION -> "订阅" to Sky
         NodeSource.IMPORT -> "导入" to TextSecondary
     }
@@ -512,10 +509,10 @@ private fun EmptyNodes(modifier: Modifier) {
         Box(
             Modifier
                 .size(72.dp)
-                .background(Mint.copy(alpha = 0.08f), CircleShape),
+                .background(Pink.copy(alpha = 0.10f), CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Rounded.Public, contentDescription = null, tint = Mint.copy(alpha = 0.7f), modifier = Modifier.size(32.dp))
+            Icon(Icons.Rounded.Public, contentDescription = null, tint = Pink.copy(alpha = 0.7f), modifier = Modifier.size(32.dp))
         }
         Text(
             "还没有节点",

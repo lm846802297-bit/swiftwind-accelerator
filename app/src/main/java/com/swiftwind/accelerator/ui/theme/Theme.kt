@@ -10,35 +10,39 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-val Ink = Color(0xFF060B12)
-val Deep = Color(0xFF0A1320)
-val Surface = Color(0xFF111C2B)
-val SurfaceHi = Color(0xFF17263A)
-val Mint = Color(0xFF52E6C0)
-val MintDeep = Color(0xFF19B98F)
-val Sky = Color(0xFF68A9FF)
-val TextPrimary = Color(0xFFEAF4FF)
-val TextSecondary = Color(0xFF8FA4BD)
-val Stroke = Color(0x1FFFFFFF)
-val Danger = Color(0xFFFF6B7A)
+val Ink = Color(0xFF0B0710)
+val Deep = Color(0xFF150B1B)
+val Surface = Color(0xFF1B1023)
+val SurfaceHi = Color(0xFF2A1733)
+val Pink = Color(0xFFFF83BA)
+val PinkDeep = Color(0xFFD94C8B)
+val Rose = Color(0xFFFFB7D3)
+val Gold = Color(0xFFFFD37A)
+val Mint = Color(0xFF62E6C2)
+val MintDeep = Color(0xFF18B990)
+val Sky = Color(0xFFB79CFF)
+val TextPrimary = Color(0xFFFFF4FA)
+val TextSecondary = Color(0xFFB89BAD)
+val Stroke = Color(0x33FFC1DC)
+val Danger = Color(0xFFFF718E)
 
 private val DarkColors = darkColorScheme(
-    primary = Mint,
-    onPrimary = Color(0xFF00251D),
-    primaryContainer = Color(0xFF0E3D33),
-    onPrimaryContainer = Mint,
-    secondary = Sky,
-    onSecondary = Color(0xFF001A33),
+    primary = Pink,
+    onPrimary = Color(0xFF2A0B1B),
+    primaryContainer = Color(0xFF4A1733),
+    onPrimaryContainer = Rose,
+    secondary = Rose,
+    onSecondary = Color(0xFF2A0B1B),
     background = Ink,
     onBackground = TextPrimary,
     surface = Surface,
     onSurface = TextPrimary,
     surfaceVariant = SurfaceHi,
     onSurfaceVariant = TextSecondary,
-    outline = Color(0x33FFFFFF),
+    outline = Color(0x55FFC1DC),
     error = Danger,
-    onError = Color(0xFF2A0006),
-    errorContainer = Color(0xFF3A1017)
+    onError = Color(0xFF2A0009),
+    errorContainer = Color(0xFF44121F)
 )
 
 private val AppTypography = Typography(

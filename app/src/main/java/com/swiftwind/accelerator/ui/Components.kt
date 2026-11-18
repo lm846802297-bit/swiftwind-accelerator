@@ -1,6 +1,7 @@
 package com.swiftwind.accelerator.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,13 +23,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.swiftwind.accelerator.ui.theme.Mint
+import com.swiftwind.accelerator.ui.theme.Pink
+import com.swiftwind.accelerator.ui.theme.Rose
 import com.swiftwind.accelerator.ui.theme.Stroke
-import com.swiftwind.accelerator.ui.theme.Surface
 import com.swiftwind.accelerator.ui.theme.TextPrimary
 import com.swiftwind.accelerator.ui.theme.TextSecondary
 
@@ -37,7 +39,8 @@ fun BottomBar(current: Int, onSelect: (Int) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color(0xF20A1320))
+            .background(Color(0xF20B0710))
+            .border(1.dp, Stroke.copy(alpha = 0.55f))
             .navigationBarsPadding()
             .padding(horizontal = 18.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -74,12 +77,16 @@ private fun BottomItem(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    val tint = if (selected) Mint else TextSecondary
+    val tint = if (selected) Pink else TextSecondary
     Column(
         modifier
             .height(52.dp)
             .background(
-                if (selected) Mint.copy(alpha = 0.10f) else Color.Transparent,
+                if (selected) {
+                    Brush.linearGradient(listOf(Pink.copy(alpha = 0.18f), Rose.copy(alpha = 0.08f)))
+                } else {
+                    Brush.linearGradient(listOf(Color.Transparent, Color.Transparent))
+                },
                 RoundedCornerShape(16.dp)
             )
             .clickable(onClick = onClick),
@@ -105,9 +112,11 @@ fun GlassCard(
     Box(
         modifier
             .fillMaxWidth()
-            .background(Surface.copy(alpha = 0.72f), RoundedCornerShape(22.dp))
-            .padding(1.dp)
-            .background(Color(0xFF0E1724), RoundedCornerShape(21.dp))
+            .background(
+                Brush.verticalGradient(listOf(Color(0xFF26152F), Color(0xFF150B1E))),
+                RoundedCornerShape(24.dp)
+            )
+            .border(1.dp, Pink.copy(alpha = 0.20f), RoundedCornerShape(24.dp))
             .padding(18.dp)
     ) {
         content()
