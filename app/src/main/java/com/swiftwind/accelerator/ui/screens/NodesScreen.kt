@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -54,7 +55,6 @@ import androidx.compose.ui.unit.sp
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.data.NodeSource
 import com.swiftwind.accelerator.vpn.NodeHealth
-import com.swiftwind.accelerator.ui.theme.Danger
 import com.swiftwind.accelerator.ui.theme.Danger
 import com.swiftwind.accelerator.ui.theme.Mint
 import com.swiftwind.accelerator.ui.theme.MintDeep
@@ -146,6 +146,7 @@ fun NodesScreen(
                         node = node,
                         selected = node.id == ui.selectedId,
                         health = ui.health[node.id] ?: NodeHealth.UNKNOWN,
+                        enabled = !ui.busy,
                         onSelect = { onSelect(node.id) },
                         onDelete = { pendingDelete = node }
                     )
@@ -160,6 +161,7 @@ fun NodesScreen(
         ) {
             OutlinedButton(
                 onClick = { showImport = true },
+                enabled = !ui.busy,
                 modifier = Modifier.weight(1f).height(50.dp),
                 shape = RoundedCornerShape(16.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Stroke),
@@ -170,6 +172,7 @@ fun NodesScreen(
             }
             OutlinedButton(
                 onClick = { showSubscription = true },
+                enabled = !ui.busy,
                 modifier = Modifier.weight(1f).height(50.dp),
                 shape = RoundedCornerShape(16.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Stroke),
@@ -203,7 +206,7 @@ fun NodesScreen(
                         onImportText(text)
                         showImport = false
                     },
-                    enabled = text.isNotBlank()
+                    enabled = text.isNotBlank() && !ui.busy
                 ) { Text("导入") }
             },
             dismissButton = {
@@ -239,7 +242,7 @@ fun NodesScreen(
                         onAddSubscription(url)
                         showSubscription = false
                     },
-                    enabled = url.isNotBlank()
+                    enabled = url.isNotBlank() && !ui.busy
                 ) { Text("拉取") }
             },
             dismissButton = {
@@ -258,7 +261,8 @@ fun NodesScreen(
                     onClick = {
                         onDelete(node.id)
                         pendingDelete = null
-                    }
+                    },
+                    enabled = !ui.busy
                 ) { Text("删除", color = Danger) }
             },
             dismissButton = {
@@ -339,13 +343,15 @@ private fun NodeRow(
     node: Node,
     selected: Boolean,
     health: NodeHealth,
+    enabled: Boolean,
     onSelect: () -> Unit,
     onDelete: () -> Unit
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onSelect),
+            .alpha(if (enabled) 1f else 0.6f)
+            .clickable(enabled = enabled, onClick = onSelect),
         shape = RoundedCornerShape(18.dp),
         color = if (selected) SurfaceHi.copy(alpha = 0.9f) else SurfaceColor.copy(alpha = 0.6f),
         border = androidx.compose.foundation.BorderStroke(
@@ -385,7 +391,11 @@ private fun NodeRow(
             }
             HealthBadge(health)
             SourceChip(node.source)
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+            IconButton(
+                onClick = onDelete,
+                enabled = enabled,
+                modifier = Modifier.size(36.dp)
+            ) {
                 Icon(
                     Icons.Rounded.DeleteOutline,
                     contentDescription = "删除节点",

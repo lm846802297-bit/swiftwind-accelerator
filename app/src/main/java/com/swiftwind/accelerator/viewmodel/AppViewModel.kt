@@ -191,7 +191,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             val finalHealth = _ui.value.health
             val finalQuality = _ui.value.quality
-            val best = nodes
+            val currentNodes = _ui.value.nodes
+            val best = currentNodes
                 .filter { finalHealth[it.id] == NodeHealth.OK }
                 .maxByOrNull { finalQuality[it.id]?.score ?: 0 }
             val currentSelected = _ui.value.selectedId
@@ -219,6 +220,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun importText(raw: String) {
+        if (_ui.value.busy) {
+            notify("正在体检或刷新节点，请稍后再导入")
+            return
+        }
         viewModelScope.launch {
             val texts = ConfigImporter.split(raw)
             if (texts.isEmpty()) {
@@ -277,10 +282,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectNode(id: String) {
+        if (_ui.value.busy) {
+            notify("正在体检或刷新节点，请稍后再切换")
+            return
+        }
         if (_ui.value.selectedId == id) return
         NodeStore.selectedId = id
         _ui.update { it.copy(selectedId = id) }
-        if (_ui.value.vpnState is VpnState.Connected) {
+        if (TunnelController.state.value is VpnState.Connected) {
             val node = _ui.value.nodes.firstOrNull { it.id == id } ?: return
             viewModelScope.launch {
                 runCatching { TunnelController.connect(node.config) }
@@ -290,10 +299,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteNode(id: String) {
+        if (_ui.value.busy) {
+            notify("正在体检或刷新节点，请稍后再删除")
+            return
+        }
         viewModelScope.launch {
             val wasSelected = _ui.value.selectedId == id
-            if (wasSelected && _ui.value.vpnState is VpnState.Connected) {
-                TunnelController.disconnect()
+            if (wasSelected && TunnelController.state.value is VpnState.Connected) {
+                runCatching { TunnelController.disconnect() }
+                    .onFailure { notify(TunnelController.mapError(it)) }
             }
             val remaining = _ui.value.nodes.filterNot { it.id == id }
             NodeStore.saveNodes(remaining)
@@ -310,7 +324,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             notify("请先添加一个节点")
             return
         }
-        if (_ui.value.vpnState is VpnState.Connecting) return
+        if (_ui.value.busy) {
+            notify("正在体检或刷新节点，请稍后再连接")
+            return
+        }
+        when (TunnelController.state.value) {
+            is VpnState.Connecting -> return
+            is VpnState.Disconnecting -> {
+                notify("正在断开，请稍后再连接")
+                return
+            }
+            else -> Unit
+        }
         viewModelScope.launch {
             runCatching { TunnelController.connect(node.config) }
                 .onFailure { notify(TunnelController.mapError(it)) }
@@ -318,7 +343,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
-        viewModelScope.launch { TunnelController.disconnect() }
+        viewModelScope.launch {
+            runCatching { TunnelController.disconnect() }
+                .onFailure { notify(TunnelController.mapError(it)) }
+        }
     }
 
     private suspend fun addNodes(nodes: List<Node>, selectFirst: Boolean): Int {
@@ -344,6 +372,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (statsJob?.isActive == true) return
         statsJob = viewModelScope.launch {
             while (isActive) {
+                TunnelController.syncState()
                 _ui.update { it.copy(stats = TunnelController.snapshot()) }
                 delay(1000)
             }

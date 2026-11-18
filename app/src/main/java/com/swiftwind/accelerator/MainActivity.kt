@@ -62,7 +62,8 @@ class MainActivity : ComponentActivity() {
     private fun toggleConnection() {
         when (TunnelController.state.value) {
             is VpnState.Connected -> viewModel.disconnect()
-            is VpnState.Connecting -> Unit
+            is VpnState.Connecting,
+            is VpnState.Disconnecting -> Unit
             else -> {
                 val intent = VpnService.prepare(this)
                 if (intent != null) {

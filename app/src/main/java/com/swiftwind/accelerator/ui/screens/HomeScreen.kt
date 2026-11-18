@@ -34,11 +34,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.swiftwind.accelerator.data.Node
@@ -73,7 +75,11 @@ fun HomeScreen(
         Spacer(Modifier.height(18.dp))
         NodeSelector(node = ui.selectedNode, onClick = onOpenNodes)
         Spacer(Modifier.weight(0.9f))
-        ConnectOrb(state = ui.vpnState, onClick = onToggle)
+        ConnectOrb(
+            state = ui.vpnState,
+            enabled = !ui.busy && ui.vpnState !is VpnState.Disconnecting,
+            onClick = onToggle
+        )
         Spacer(Modifier.height(16.dp))
         Text(
             text = statusTitle(ui.vpnState),
@@ -175,14 +181,16 @@ private fun NodeSelector(node: Node?, onClick: () -> Unit) {
                     node?.name ?: "尚未添加节点",
                     style = MaterialTheme.typography.titleMedium,
                     color = TextPrimary,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (node != null) {
                     Text(
                         node.endpoint.ifBlank { "WireGuard" },
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary.copy(alpha = 0.7f),
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -193,7 +201,7 @@ private fun NodeSelector(node: Node?, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ConnectOrb(state: VpnState, onClick: () -> Unit) {
+private fun ConnectOrb(state: VpnState, enabled: Boolean, onClick: () -> Unit) {
     val active = state is VpnState.Connected || state is VpnState.Connecting
     val transition = rememberInfiniteTransition(label = "orb-pulse")
     val pulse by transition.animateFloat(
@@ -243,7 +251,8 @@ private fun ConnectOrb(state: VpnState, onClick: () -> Unit) {
                         Brush.linearGradient(listOf(Color(0xFF1F3148), Color(0xFF0D1724)))
                     }
                 )
-                .clickable(onClick = onClick),
+                .alpha(if (enabled) 1f else 0.55f)
+                .clickable(enabled = enabled, onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {

@@ -33,6 +33,10 @@ object TunnelController {
     private lateinit var backend: GoBackend
     private var startedAt = 0L
 
+    /** 串行化连接/断开/体检的入口，避免体检 finally 拆掉刚建立的连接。 */
+    private val operationGate = Any()
+    private var probing = false
+
     private val tunnel = object : Tunnel {
         override fun getName(): String = TUNNEL_NAME
         override fun onStateChange(newState: Tunnel.State) = Unit
@@ -50,20 +54,34 @@ object TunnelController {
     /** App 进程重启后，检查系统里是否已有本 App 的隧道在运行。 */
     fun syncState() {
         if (!::backend.isInitialized) return
-        runCatching {
-            val running = backend.getRunningTunnelNames()
-            if (running.contains(TUNNEL_NAME)) {
-                if (_state.value !is VpnState.Connected) startedAt = SystemClock.elapsedRealtime()
-                _state.value = VpnState.Connected
-            } else if (_state.value is VpnState.Connected) {
-                _state.value = VpnState.Idle
-                startedAt = 0L
+        synchronized(operationGate) {
+            if (probing) return
+            runCatching {
+                val running = backend.getRunningTunnelNames().contains(TUNNEL_NAME)
+                when {
+                    _state.value is VpnState.Connected && !running -> {
+                        startedAt = 0L
+                        _state.value = VpnState.Idle
+                    }
+                    _state.value is VpnState.Idle && running -> {
+                        startedAt = SystemClock.elapsedRealtime()
+                        _state.value = VpnState.Connected
+                    }
+                }
             }
         }
     }
 
     suspend fun connect(configText: String) = withContext(Dispatchers.IO) {
-        _state.value = VpnState.Connecting
+        synchronized(operationGate) {
+            if (probing) throw IllegalStateException("正在体检节点，请稍后再连接")
+            when (_state.value) {
+                is VpnState.Connecting,
+                is VpnState.Disconnecting -> throw IllegalStateException("正在切换连接，请稍后再试")
+                else -> Unit
+            }
+            _state.value = VpnState.Connecting
+        }
         try {
             val config: Config = Config.parse(BufferedReader(StringReader(configText)))
             backend.setState(tunnel, Tunnel.State.UP, config)
@@ -76,7 +94,13 @@ object TunnelController {
     }
 
     suspend fun disconnect() = withContext(Dispatchers.IO) {
-        _state.value = VpnState.Disconnecting
+        synchronized(operationGate) {
+            if (probing) throw IllegalStateException("正在体检节点，请稍后再断开")
+            if (_state.value is VpnState.Connecting) {
+                throw IllegalStateException("正在连接，请稍后再断开")
+            }
+            _state.value = VpnState.Disconnecting
+        }
         try {
             if (::backend.isInitialized) {
                 backend.setState(tunnel, Tunnel.State.DOWN, null)
@@ -97,14 +121,17 @@ object TunnelController {
             if (!::backend.isInitialized) {
                 throw IllegalStateException("VPN 组件尚未初始化")
             }
-            when (_state.value) {
-                is VpnState.Connected,
-                is VpnState.Connecting,
-                is VpnState.Disconnecting -> throw IllegalStateException("请先断开当前连接再体检")
-                else -> Unit
-            }
-
             val config: Config = Config.parse(BufferedReader(StringReader(configText)))
+            synchronized(operationGate) {
+                if (probing) throw IllegalStateException("体检正在进行，请稍后再试")
+                when (_state.value) {
+                    is VpnState.Connected,
+                    is VpnState.Connecting,
+                    is VpnState.Disconnecting -> throw IllegalStateException("请先断开当前连接再体检")
+                    else -> Unit
+                }
+                probing = true
+            }
             try {
                 backend.setState(tunnel, Tunnel.State.UP, config)
                 val handshakeMs = awaitHandshake(timeoutMs)
@@ -120,6 +147,7 @@ object TunnelController {
                 )
             } finally {
                 runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                synchronized(operationGate) { probing = false }
             }
         }
 
