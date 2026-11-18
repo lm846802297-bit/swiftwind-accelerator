@@ -1,6 +1,7 @@
 package com.swiftwind.accelerator.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.swiftwind.accelerator.data.Node
@@ -13,6 +14,7 @@ import com.swiftwind.accelerator.vpn.TunnelController
 import com.swiftwind.accelerator.vpn.TunnelStats
 import com.swiftwind.accelerator.vpn.VpnState
 import com.swiftwind.accelerator.vpn.NodeHealth
+import com.swiftwind.accelerator.vpn.NodeQuality
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -33,7 +35,8 @@ data class UiState(
     val vpnState: VpnState = VpnState.Idle,
     val stats: TunnelStats = TunnelStats(),
     val busy: Boolean = false,
-    val health: Map<String, NodeHealth> = emptyMap()
+    val health: Map<String, NodeHealth> = emptyMap(),
+    val quality: Map<String, NodeQuality> = emptyMap()
 ) {
     val selectedNode: Node?
         get() = nodes.firstOrNull { it.id == selectedId }
@@ -82,13 +85,46 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun fetchWarpNode() {
         if (_ui.value.busy) return
+        when (_ui.value.vpnState) {
+            is VpnState.Connected,
+            is VpnState.Connecting,
+            is VpnState.Disconnecting -> {
+                notify("请先断开当前连接再更新 WARP 节点")
+                return
+            }
+            else -> Unit
+        }
         viewModelScope.launch {
             _ui.update { it.copy(busy = true) }
             try {
-                val nodes = withContext(Dispatchers.IO) { warpClient.registerNodes() }
-                val added = addNodes(nodes, selectFirst = true)
-                val suffix = if (added < nodes.size) "（新增 $added 条，其余已存在）" else ""
-                notify("已获取 ${nodes.size} 条 Cloudflare WARP 免费线路$suffix，建议点「一键体检」确认可用")
+                val fresh = withContext(Dispatchers.IO) { warpClient.registerNodes() }
+                if (fresh.isEmpty()) {
+                    notify("没有获取到可用的 WARP 线路，请稍后重试")
+                    return@launch
+                }
+                val current = _ui.value.nodes
+                val previous = current.firstOrNull { it.id == _ui.value.selectedId }
+                val manual = current.filter { it.source != NodeSource.WARP }
+                val merged = manual + fresh
+                NodeStore.saveNodes(merged)
+                val selected = when {
+                    previous != null && previous.source != NodeSource.WARP &&
+                        merged.any { it.id == previous.id } -> previous.id
+                    previous != null -> fresh.firstOrNull {
+                        it.endpoint == previous.endpoint
+                    }?.id ?: fresh.first().id
+                    else -> fresh.first().id
+                }
+                NodeStore.selectedId = selected
+                _ui.update {
+                    it.copy(
+                        nodes = merged,
+                        selectedId = selected,
+                        health = emptyMap(),
+                        quality = emptyMap()
+                    )
+                }
+                notify("已更新 ${fresh.size} 条 Cloudflare WARP 免费线路，建议点「一键体检」按质量排序")
             } catch (t: Throwable) {
                 notify("获取免费节点失败：${TunnelController.mapError(t)}")
             } finally {
@@ -118,40 +154,66 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _ui.update {
                 it.copy(
                     busy = true,
-                    health = it.nodes.associate { node -> node.id to NodeHealth.CHECKING }
+                    health = it.nodes.associate { node -> node.id to NodeHealth.CHECKING },
+                    quality = emptyMap()
                 )
             }
             var available = 0
             var firstError: String? = null
             for (node in nodes) {
-                val success = try {
-                    TunnelController.probe(node.config)
+                val result = try {
+                    TunnelController.probe(node.config, timeoutMs = 3000L)
                 } catch (t: Throwable) {
                     if (firstError == null) firstError = TunnelController.mapError(t)
-                    false
+                    null
                 }
+                val success = result?.healthy == true
                 if (success) available++
+                if (result != null) {
+                    Log.d(
+                        "SwiftWindQuality",
+                        "${node.name} ${node.endpoint} healthy=${result.healthy} " +
+                            "score=${result.score} handshake=${result.handshakeMs}ms " +
+                            "http=${result.httpLatencyMs}ms throughput=${result.throughputKbps}kbps"
+                    )
+                }
                 _ui.update {
                     it.copy(
-                        health = it.health + (node.id to if (success) NodeHealth.OK else NodeHealth.FAIL)
+                        health = it.health + (node.id to if (success) NodeHealth.OK else NodeHealth.FAIL),
+                        quality = if (result != null) {
+                            it.quality + (node.id to result.toQuality())
+                        } else {
+                            it.quality
+                        }
                     )
                 }
                 delay(300)
             }
             val finalHealth = _ui.value.health
+            val finalQuality = _ui.value.quality
+            val best = nodes
+                .filter { finalHealth[it.id] == NodeHealth.OK }
+                .maxByOrNull { finalQuality[it.id]?.score ?: 0 }
             val currentSelected = _ui.value.selectedId
-            if (currentSelected == null || finalHealth[currentSelected] == NodeHealth.FAIL) {
-                val firstHealthy = nodes.firstOrNull { finalHealth[it.id] == NodeHealth.OK }?.id
-                if (firstHealthy != null && firstHealthy != currentSelected) {
-                    NodeStore.selectedId = firstHealthy
-                    _ui.update { it.copy(selectedId = firstHealthy) }
-                }
+            if (best != null && best.id != currentSelected) {
+                NodeStore.selectedId = best.id
+                _ui.update { it.copy(selectedId = best.id) }
+            }
+            if (best != null) {
+                Log.d(
+                    "SwiftWindQuality",
+                    "best=${best.name} ${best.endpoint} score=${finalQuality[best.id]?.score}"
+                )
             }
             _ui.update { it.copy(busy = false) }
             if (available == 0 && firstError != null) {
                 notify("体检失败：$firstError")
+            } else if (best != null) {
+                val quality = finalQuality[best.id]
+                val detail = quality?.summary?.let { "（$it）" } ?: ""
+                notify("体检完成：$available/${nodes.size} 条线路可用，已选择最优 ${best.name}$detail")
             } else {
-                notify("体检完成：$available/${nodes.size} 条线路握手成功")
+                notify("体检完成：$available/${nodes.size} 条线路可用")
             }
         }
     }

@@ -12,15 +12,21 @@ object WarpEndpoints {
 
     /**
      * 这些是 Cloudflare 的 WARP anycast 入口。不是第三方节点，也不需要服务器。
-     * 2026-11 在本机实测中，97.1 / 195.1 多次返回 WireGuard 握手响应，
-     * 99.1 与 98.1:500 也有响应；96.1 未响应。入口会随时段波动，
-     * 最终以 App 内「一键体检」的结果为准。
+     * 8 个常用 anycast 主机覆盖 2408 主端口，另补 97.1 / 195.1 的 500 端口。
+     * 入口会随时段、运营商和地区波动，所以这里只负责扩大候选范围，
+     * 最终是否可用、哪条最优，以 App 内「一键体检」的真实握手和测速结果为准。
      */
-    private val testedAlternates = listOf(
+    private val preferredAnycast = listOf(
         "188.114.97.1:2408",
-        "188.114.99.1:2408",
         "162.159.195.1:2408",
-        "188.114.98.1:500"
+        "188.114.99.1:2408",
+        "188.114.98.1:500",
+        "188.114.96.1:2408",
+        "162.159.192.1:2408",
+        "162.159.193.1:2408",
+        "162.159.194.1:2408",
+        "188.114.97.1:500",
+        "162.159.195.1:500"
     )
 
     fun build(
@@ -33,7 +39,7 @@ object WarpEndpoints {
         val candidates = linkedMapOf<String, Candidate>()
 
         // 先放实测响应更稳定的 anycast 入口，注册返回的地址作为补充。
-        testedAlternates.forEachIndexed { index, endpoint ->
+        preferredAnycast.forEachIndexed { index, endpoint ->
             candidates.putIfAbsent(
                 endpoint,
                 Candidate("优选${index + 1}", endpoint)

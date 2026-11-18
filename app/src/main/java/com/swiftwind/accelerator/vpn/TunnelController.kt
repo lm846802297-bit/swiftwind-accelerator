@@ -13,12 +13,22 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.StringReader
+import java.util.concurrent.TimeUnit
 
 object TunnelController {
     private const val TUNNEL_NAME = "swiftwind"
+    private const val SPEED_TEST_URL = "https://speed.cloudflare.com/__down?bytes=32768"
+    private val speedClient = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .callTimeout(4, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .build()
 
     private lateinit var backend: GoBackend
     private var startedAt = 0L
@@ -79,10 +89,10 @@ object TunnelController {
     }
 
     /**
-     * 真实拉起隧道并检查 WireGuard 握手，用来判断节点是否可用。
+     * 真实拉起隧道，先测 WireGuard 握手耗时，再在隧道内做一次小流量 HTTPS 下载。
      * 只在未连接状态下执行，结束后一定回落，不改变界面的连接状态。
      */
-    suspend fun probe(configText: String, timeoutMs: Long = 3500L): Boolean =
+    suspend fun probe(configText: String, timeoutMs: Long = 3000L): ProbeResult =
         withContext(Dispatchers.IO) {
             if (!::backend.isInitialized) {
                 throw IllegalStateException("VPN 组件尚未初始化")
@@ -97,15 +107,67 @@ object TunnelController {
             val config: Config = Config.parse(BufferedReader(StringReader(configText)))
             try {
                 backend.setState(tunnel, Tunnel.State.UP, config)
-                delay(timeoutMs)
-                val statistics = backend.getStatistics(tunnel)
-                val peer = statistics.peers().firstOrNull()
-                val handshake = peer?.let { statistics.peer(it)?.latestHandshakeEpochMillis } ?: 0L
-                handshake > 0L || statistics.totalRx() > 0L
+                val handshakeMs = awaitHandshake(timeoutMs)
+                if (handshakeMs < 0L) {
+                    return@withContext ProbeResult(healthy = false)
+                }
+                val speed = measureSpeed()
+                ProbeResult(
+                    healthy = true,
+                    handshakeMs = handshakeMs,
+                    httpLatencyMs = speed.first,
+                    throughputKbps = speed.second
+                )
             } finally {
                 runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
             }
         }
+
+    /** 轮询握手时间戳；返回从拉起隧道到握手的耗时，超时返回 -1。 */
+    private suspend fun awaitHandshake(timeoutMs: Long): Long {
+        val started = SystemClock.elapsedRealtime()
+        while (SystemClock.elapsedRealtime() - started < timeoutMs) {
+            val statistics = backend.getStatistics(tunnel)
+            val peer = statistics.peers().firstOrNull()
+            val handshake = peer?.let { statistics.peer(it)?.latestHandshakeEpochMillis } ?: 0L
+            if (handshake > 0L || statistics.totalRx() > 0L) {
+                return SystemClock.elapsedRealtime() - started
+            }
+            delay(100)
+        }
+        return -1L
+    }
+
+    /**
+     * 隧道内下载一个小文件，返回（首字节延迟 ms，吞吐 kbps）。
+     * 测速失败不影响可用性判断，只会在质量分里扣掉吞吐部分。
+     */
+    private fun measureSpeed(): Pair<Long, Int> {
+        val started = SystemClock.elapsedRealtime()
+        return runCatching {
+            val request = Request.Builder()
+                .url(SPEED_TEST_URL)
+                .header("User-Agent", "SwiftWind/1.0")
+                .build()
+            speedClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use 0L to 0
+                val body = response.body ?: return@use 0L to 0
+                val httpLatencyMs = SystemClock.elapsedRealtime() - started
+                var totalBytes = 0L
+                val buffer = ByteArray(8192)
+                body.byteStream().use { input ->
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        totalBytes += read
+                    }
+                }
+                val totalMs = (SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
+                val kbps = (totalBytes * 8L / totalMs).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                httpLatencyMs to kbps
+            }
+        }.getOrDefault(0L to 0)
+    }
 
     fun snapshot(): TunnelStats {
         if (!::backend.isInitialized || _state.value !is VpnState.Connected) {
