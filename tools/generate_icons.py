@@ -1,4 +1,4 @@
-"""生成疾风加速器的启动图标（各密度 PNG）。"""
+"""生成花意加速器的启动图标（各密度 PNG）。"""
 import os
 
 from PIL import Image, ImageDraw

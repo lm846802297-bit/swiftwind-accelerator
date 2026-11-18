@@ -29,9 +29,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.swiftwind.accelerator.BuildConfig
+import com.swiftwind.accelerator.R
 import com.swiftwind.accelerator.ui.GlassCard
 import com.swiftwind.accelerator.ui.theme.Mint
 import com.swiftwind.accelerator.ui.theme.Stroke
@@ -115,7 +117,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.weight(1f))
         Text(
-            "疾风加速器 · SwiftWind",
+            "${stringResource(R.string.app_name)} · HUAYI",
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary.copy(alpha = 0.55f),
             modifier = Modifier.align(Alignment.CenterHorizontally)

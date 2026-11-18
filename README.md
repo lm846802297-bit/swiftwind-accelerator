@@ -1,4 +1,4 @@
-# 疾风加速器（SwiftWind）
+# 花意加速器（Huayi）
 
 一个轻量的 Android WireGuard 客户端，内置 Cloudflare WARP 免费节点一键注册，也支持手动导入 `.conf` 与订阅链接。
 

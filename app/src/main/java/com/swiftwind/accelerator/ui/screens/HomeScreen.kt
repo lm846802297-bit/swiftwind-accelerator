@@ -39,10 +39,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.swiftwind.accelerator.R
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.ui.GlassCard
 import com.swiftwind.accelerator.ui.theme.Danger
@@ -124,12 +126,12 @@ private fun Header(state: VpnState) {
         }
         Column(Modifier.padding(start = 12.dp).weight(1f)) {
             Text(
-                "疾风加速器",
+                stringResource(R.string.app_name),
                 style = MaterialTheme.typography.titleLarge,
                 color = TextPrimary
             )
             Text(
-                "SWIFTWIND · WIREGUARD",
+                "HUAYI · WIREGUARD",
                 style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.2.sp, fontSize = 9.sp),
                 color = Mint.copy(alpha = 0.75f)
             )
