@@ -1,14 +1,19 @@
 package com.swiftwind.accelerator.net
 
+import android.util.Log
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.data.NodeSource
 import com.wireguard.crypto.KeyPair
+import okhttp3.Dns
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -16,11 +21,7 @@ import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 class WarpClient(
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .callTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient = defaultClient()
 ) {
     private data class WarpRegistration(
         val node: Node,
@@ -47,14 +48,31 @@ class WarpClient(
             put("locale", "en_US")
             put("serial_number", "")
             put("os_version", "16")
-        }
+        }.toString()
 
+        var lastError: Throwable? = null
+        for (endpoint in REG_ENDPOINTS) {
+            try {
+                return registerAt(endpoint, body, keyPair)
+            } catch (t: Throwable) {
+                lastError = t
+                Log.w("SwiftWindWarp", "register failed at $endpoint: ${t.javaClass.simpleName}: ${t.message}")
+            }
+        }
+        throw lastError ?: IOException("WARP 注册失败")
+    }
+
+    private fun registerAt(
+        endpoint: String,
+        body: String,
+        keyPair: KeyPair
+    ): WarpRegistration {
         val request = Request.Builder()
-            .url("https://api.cloudflareclient.com/v0a5641/reg")
+            .url(endpoint)
             .header("CF-Client-Version", "a-6.38.9-5641")
             .header("User-Agent", "1.1.1.1/6.38.9-5641 (Android 16.0.0)")
             .header("Accept", "application/json")
-            .post(body.toString().toRequestBody("application/json; charset=UTF-8".toMediaType()))
+            .post(body.toRequestBody("application/json; charset=UTF-8".toMediaType()))
             .build()
 
         val response = client.newCall(request).execute()
@@ -146,5 +164,31 @@ class WarpClient(
             val colon = raw.indexOf(':')
             if (colon >= 0) raw.substring(0, colon) else raw
         }
+    }
+
+    private companion object {
+        val REG_ENDPOINTS = listOf(
+            "https://api.cloudflareclient.com/v0a5641/reg",
+            "https://api.cloudflareclient.com/v0a2158/reg"
+        )
+
+        // 部分 5G / IPv6 网络对 Cloudflare API 的 IPv6 路由不稳定；
+        // 注册请求优先使用 IPv4，只有域名没有 A 记录时才回退到全部地址。
+        val IPV4_FIRST_DNS = object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                val all = Dns.SYSTEM.lookup(hostname)
+                val v4 = all.filterIsInstance<Inet4Address>()
+                return v4.ifEmpty { all }
+            }
+        }
+
+        fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .callTimeout(20, TimeUnit.SECONDS)
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .retryOnConnectionFailure(true)
+            .dns(IPV4_FIRST_DNS)
+            .build()
     }
 }
