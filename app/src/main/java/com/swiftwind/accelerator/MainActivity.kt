@@ -1,0 +1,101 @@
+package com.swiftwind.accelerator
+
+import android.content.Intent
+import android.net.VpnService
+import android.os.Bundle
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
+import androidx.core.view.WindowCompat
+import com.swiftwind.accelerator.ui.SwiftWindApp
+import com.swiftwind.accelerator.ui.theme.SwiftWindTheme
+import com.swiftwind.accelerator.viewmodel.AppViewModel
+import com.swiftwind.accelerator.vpn.TunnelController
+import com.swiftwind.accelerator.vpn.VpnState
+
+class MainActivity : ComponentActivity() {
+
+    private val viewModel: AppViewModel by viewModels()
+    private lateinit var vpnPermissionLauncher: ActivityResultLauncher<Intent>
+    private var pendingProbe = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        vpnPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == RESULT_OK) {
+                if (pendingProbe) {
+                    pendingProbe = false
+                    viewModel.probeNodes()
+                } else {
+                    viewModel.connect()
+                }
+            } else {
+                pendingProbe = false
+                Toast.makeText(this, "未授权系统 VPN，无法建立连接", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        setContent {
+            SwiftWindTheme {
+                val ui by viewModel.ui.collectAsState()
+                SwiftWindApp(
+                    ui = ui,
+                    viewModel = viewModel,
+                    onToggleConnection = ::toggleConnection,
+                    onProbeNodes = ::probeNodes,
+                    onOpenVpnSettings = ::openVpnSettings
+                )
+            }
+        }
+    }
+
+    private fun toggleConnection() {
+        when (TunnelController.state.value) {
+            is VpnState.Connected -> viewModel.disconnect()
+            is VpnState.Connecting -> Unit
+            else -> {
+                val intent = VpnService.prepare(this)
+                if (intent != null) {
+                    vpnPermissionLauncher.launch(intent)
+                } else {
+                    viewModel.connect()
+                }
+            }
+        }
+    }
+
+    private fun probeNodes() {
+        if (TunnelController.state.value is VpnState.Connected ||
+            TunnelController.state.value is VpnState.Connecting ||
+            TunnelController.state.value is VpnState.Disconnecting
+        ) {
+            Toast.makeText(this, "请先断开当前连接再体检", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = VpnService.prepare(this)
+        if (intent != null) {
+            pendingProbe = true
+            vpnPermissionLauncher.launch(intent)
+        } else {
+            viewModel.probeNodes()
+        }
+    }
+
+    private fun openVpnSettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+        }.onFailure {
+            Toast.makeText(this, "无法打开系统 VPN 设置", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
