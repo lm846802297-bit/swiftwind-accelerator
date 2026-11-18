@@ -29,8 +29,8 @@ data class Node(
 
     companion object {
         fun fromJson(json: JSONObject): Node = Node(
-            id = json.optString("id", UUID.randomUUID().toString()),
-            name = json.optString("name", "未命名节点"),
+            id = json.optString("id").takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString(),
+            name = json.optString("name").takeIf { it.isNotBlank() } ?: "未命名节点",
             config = json.getString("config"),
             endpoint = json.optString("endpoint", ""),
             source = runCatching { NodeSource.valueOf(json.optString("source", "IMPORT")) }
@@ -40,14 +40,13 @@ data class Node(
 
         fun listFromJson(raw: String?): List<Node> {
             if (raw.isNullOrBlank()) return emptyList()
-            return runCatching {
-                val array = JSONArray(raw)
-                buildList {
-                    for (i in 0 until array.length()) {
-                        add(fromJson(array.getJSONObject(i)))
-                    }
+            val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+            return buildList {
+                // 单条记录损坏时只跳过该条，不能让整份节点列表一起消失。
+                for (i in 0 until array.length()) {
+                    runCatching { add(fromJson(array.getJSONObject(i))) }
                 }
-            }.getOrDefault(emptyList())
+            }
         }
     }
 }

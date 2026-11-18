@@ -16,7 +16,7 @@ object ConfigImporter {
         }
 
         return text
-            .split(Regex("(?=\\\\[Interface\\\\])", RegexOption.IGNORE_CASE))
+            .split(Regex("(?=\\[Interface\\])", RegexOption.IGNORE_CASE))
             .map { it.trim().replace("\r\n", "\n") }
             .filter { it.contains("[Interface]", true) && it.contains("[Peer]", true) }
             .distinct()

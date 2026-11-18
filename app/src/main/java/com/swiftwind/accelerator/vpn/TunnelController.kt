@@ -84,13 +84,87 @@ object TunnelController {
         }
         try {
             val config: Config = Config.parse(BufferedReader(StringReader(configText)))
-            backend.setState(tunnel, Tunnel.State.UP, config)
+            // 用 backend 当前是否已有隧道来判断首次连接还是“已连接状态下切换节点”。
+            val hadTunnel = isRunning()
+            if (hadTunnel) {
+                // GoBackend 自带的 DOWN→UP 只隔几十毫秒，ColorOS/Realme 的系统 VPN
+                // NetworkAgent 来不及回收，会出现新隧道刚起就被系统断开的竞态。
+                // 这里显式先断开，等系统把 tun0 和 NetworkAgent 释放干净，再建立新隧道。
+                runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                awaitRunning(false, 1500L)
+                delay(400L)
+            }
+            startTunnel(config)
             startedAt = SystemClock.elapsedRealtime()
             _state.value = VpnState.Connected
         } catch (t: Throwable) {
-            _state.value = VpnState.Error(mapError(t))
+            // GoBackend 在切换配置失败时会尝试恢复旧隧道；如果旧隧道确实还在，
+            // 不能让 UI 停在“失败/未连接”，否则会出现界面与实际 VPN 状态相反。
+            val stillRunning = runCatching {
+                ::backend.isInitialized && backend.getRunningTunnelNames().contains(TUNNEL_NAME)
+            }.getOrDefault(false)
+            if (stillRunning) {
+                if (startedAt == 0L) startedAt = SystemClock.elapsedRealtime()
+                _state.value = VpnState.Connected
+            } else {
+                _state.value = VpnState.Error(mapError(t))
+            }
             throw t
         }
+    }
+
+    private fun isRunning(): Boolean = runCatching {
+        ::backend.isInitialized && backend.getRunningTunnelNames().contains(TUNNEL_NAME)
+    }.getOrDefault(false)
+
+    /** 轮询 backend 的隧道运行状态，直到达到期望值或超时。 */
+    private suspend fun awaitRunning(expected: Boolean, timeoutMs: Long): Boolean {
+        val started = SystemClock.elapsedRealtime()
+        while (SystemClock.elapsedRealtime() - started < timeoutMs) {
+            if (isRunning() == expected) return true
+            delay(100L)
+        }
+        return isRunning() == expected
+    }
+
+    /** 要求隧道在连续 minStableMs 内一直存在，避免建立后立刻被系统回收却被判定为成功。 */
+    private suspend fun awaitStableRunning(minStableMs: Long, timeoutMs: Long): Boolean {
+        val started = SystemClock.elapsedRealtime()
+        var upSince = 0L
+        while (SystemClock.elapsedRealtime() - started < timeoutMs) {
+            val now = SystemClock.elapsedRealtime()
+            if (isRunning()) {
+                if (upSince == 0L) upSince = now
+                if (now - upSince >= minStableMs) return true
+            } else {
+                upSince = 0L
+            }
+            delay(100L)
+        }
+        return false
+    }
+
+    /**
+     * 建立隧道并做稳定性校验。ColorOS 上偶发“Device started 后 0.1s 被系统断开”，
+     * 因此不能只看 setState 是否返回成功，必须确认隧道连续存活，失败时清场重试一次。
+     */
+    private suspend fun startTunnel(config: Config) {
+        var lastError: Throwable? = null
+        repeat(2) { attempt ->
+            val ok = runCatching {
+                backend.setState(tunnel, Tunnel.State.UP, config)
+                awaitStableRunning(1200L, 2800L)
+            }.getOrElse { t ->
+                lastError = t
+                false
+            }
+            if (ok) return
+            if (lastError == null) lastError = IllegalStateException("VPN 隧道未能保持运行，请重试")
+            runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+            awaitRunning(false, 1200L)
+            if (attempt == 0) delay(500L)
+        }
+        throw lastError ?: IllegalStateException("VPN 隧道未能保持运行，请重试")
     }
 
     suspend fun disconnect() = withContext(Dispatchers.IO) {
@@ -104,6 +178,7 @@ object TunnelController {
         try {
             if (::backend.isInitialized) {
                 backend.setState(tunnel, Tunnel.State.DOWN, null)
+                awaitRunning(false, 1500L)
             }
         } catch (_: Throwable) {
         } finally {

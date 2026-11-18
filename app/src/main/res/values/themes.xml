@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.SwiftWind" parent="@android:style/Theme.Material.NoActionBar">
+    <!-- windowLightNavigationBar 只在 API 27+ 存在，放在 values-v27 覆盖，避免旧系统资源冲突。 -->
+    <style name="SwiftWindBaseTheme" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/ink</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowDisablePreview">false</item>
     </style>
+
+    <style name="Theme.SwiftWind" parent="@style/SwiftWindBaseTheme" />
 </resources>

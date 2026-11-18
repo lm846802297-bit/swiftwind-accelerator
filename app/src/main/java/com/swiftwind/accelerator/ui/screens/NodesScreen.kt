@@ -66,6 +66,7 @@ import com.swiftwind.accelerator.ui.theme.TextPrimary
 import com.swiftwind.accelerator.ui.theme.TextSecondary
 import com.swiftwind.accelerator.viewmodel.ProbeProgress
 import com.swiftwind.accelerator.viewmodel.UiState
+import com.swiftwind.accelerator.vpn.VpnState
 
 @Composable
 fun NodesScreen(
@@ -82,6 +83,9 @@ fun NodesScreen(
     var showSubscription by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<Node?>(null) }
     val probeProgress = ui.probeProgress
+    val nodeActionsEnabled = !ui.busy &&
+        ui.vpnState !is VpnState.Connecting &&
+        ui.vpnState !is VpnState.Disconnecting
 
     Column(
         Modifier
@@ -157,7 +161,7 @@ fun NodesScreen(
                         node = node,
                         selected = node.id == ui.selectedId,
                         health = ui.health[node.id] ?: NodeHealth.UNKNOWN,
-                        enabled = !ui.busy,
+                        enabled = nodeActionsEnabled,
                         onSelect = { onSelect(node.id) },
                         onDelete = { pendingDelete = node }
                     )
@@ -234,7 +238,7 @@ fun NodesScreen(
             text = {
                 Column {
                     Text(
-                        "支持返回 WireGuard 配置的 http/https 链接，可包含多个节点。",
+                        "支持返回 WireGuard 配置的 HTTPS 链接，可包含多个节点。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
                     )
@@ -273,7 +277,7 @@ fun NodesScreen(
                         onDelete(node.id)
                         pendingDelete = null
                     },
-                    enabled = !ui.busy
+                    enabled = nodeActionsEnabled
                 ) { Text("删除", color = Danger) }
             },
             dismissButton = {

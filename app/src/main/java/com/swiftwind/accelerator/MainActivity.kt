@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingProbe = savedInstanceState?.getBoolean(KEY_PENDING_PROBE) ?: false
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         vpnPermissionLauncher = registerForActivityResult(
@@ -59,6 +60,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(KEY_PENDING_PROBE, pendingProbe)
+        super.onSaveInstanceState(outState)
+    }
+
     private fun toggleConnection() {
         when (TunnelController.state.value) {
             is VpnState.Connected -> viewModel.disconnect()
@@ -69,6 +75,7 @@ class MainActivity : ComponentActivity() {
                 if (intent != null) {
                     vpnPermissionLauncher.launch(intent)
                 } else {
+                    pendingProbe = false
                     viewModel.connect()
                 }
             }
@@ -98,5 +105,9 @@ class MainActivity : ComponentActivity() {
         }.onFailure {
             Toast.makeText(this, "无法打开系统 VPN 设置", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private companion object {
+        const val KEY_PENDING_PROBE = "pending_probe"
     }
 }
