@@ -85,7 +85,11 @@ object TunnelController {
         }
     }
 
-    suspend fun connect(configText: String, verifyData: Boolean = true) = withContext(Dispatchers.IO) {
+    suspend fun connect(
+        configText: String,
+        verifyData: Boolean = true,
+        handshakeTimeoutMs: Long = 2000L
+    ) = withContext(Dispatchers.IO) {
         synchronized(operationGate) {
             if (probing) throw IllegalStateException("正在体检节点，请稍后再连接")
             when (_state.value) {
@@ -114,7 +118,7 @@ object TunnelController {
             Log.d("SwiftWindSwitch", "connect tunnel-up +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
             // 隧道“UP”不等于节点可用：必须收到 WireGuard 握手，否则会把手动选择的
             // 死节点显示成“已连接”，用户实际没有网络。
-            val handshake = awaitHandshake(2000L)
+            val handshake = awaitHandshake(handshakeTimeoutMs)
             Log.d("SwiftWindSwitch", "connect handshake=$handshake +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
             if (handshake < 0L) {
                 runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }

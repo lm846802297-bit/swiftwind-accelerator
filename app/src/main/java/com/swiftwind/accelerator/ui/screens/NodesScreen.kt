@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,13 +40,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +72,9 @@ import com.swiftwind.accelerator.ui.theme.TextSecondary
 import com.swiftwind.accelerator.viewmodel.ProbeProgress
 import com.swiftwind.accelerator.viewmodel.UiState
 import com.swiftwind.accelerator.vpn.VpnState
+import kotlinx.coroutines.delay
+
+private const val HEALTH_TTL_MS = 10 * 60 * 1000L
 
 @Composable
 fun NodesScreen(
@@ -83,7 +90,15 @@ fun NodesScreen(
     var showImport by remember { mutableStateOf(false) }
     var showSubscription by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<Node?>(null) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val probeProgress = ui.probeProgress
+    val lastChecked = ui.healthCheckedAt.values.maxOrNull()
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000L)
+            now = System.currentTimeMillis()
+        }
+    }
     val nodeActionsEnabled = !ui.busy &&
         ui.vpnState !is VpnState.Connecting &&
         ui.vpnState !is VpnState.Disconnecting
@@ -144,6 +159,18 @@ fun NodesScreen(
                 )
             }
         }
+        Text(
+            text = when {
+                probeProgress != null -> "体检进行中 · 结果完成后刷新"
+                lastChecked == null -> "尚未体检"
+                now - lastChecked > HEALTH_TTL_MS ->
+                    "上次体检 · ${relativeTime(lastChecked, now)}（结果已过期）"
+                else -> "上次体检 · ${relativeTime(lastChecked, now)}"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = TextSecondary.copy(alpha = 0.78f),
+            modifier = Modifier.padding(top = 2.dp)
+        )
         if (probeProgress != null) {
             Spacer(Modifier.height(8.dp))
             ProbeProgressCard(progress = probeProgress, onCancel = onCancelProbe)
@@ -154,14 +181,21 @@ fun NodesScreen(
             EmptyNodes(Modifier.weight(1f))
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).clipToBounds(),
+                contentPadding = PaddingValues(bottom = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(ui.nodes, key = { it.id }) { node ->
+                    val checkedAt = ui.healthCheckedAt[node.id]
+                    val health = if (checkedAt != null && now - checkedAt > HEALTH_TTL_MS) {
+                        NodeHealth.UNKNOWN
+                    } else {
+                        ui.health[node.id] ?: NodeHealth.UNKNOWN
+                    }
                     NodeRow(
                         node = node,
                         selected = node.id == ui.selectedId,
-                        health = ui.health[node.id] ?: NodeHealth.UNKNOWN,
+                        health = health,
                         enabled = nodeActionsEnabled,
                         onSelect = { onSelect(node.id) },
                         onDelete = { pendingDelete = node }
@@ -172,7 +206,10 @@ fun NodesScreen(
         }
 
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0B0710))
+                .padding(top = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             OutlinedButton(
@@ -288,6 +325,16 @@ fun NodesScreen(
     }
 }
 
+private fun relativeTime(timestamp: Long, now: Long): String {
+    val minutes = ((now - timestamp).coerceAtLeast(0L) / 60_000L)
+    return when {
+        minutes < 1L -> "刚刚"
+        minutes < 60L -> "${minutes} 分钟前"
+        minutes < 24L * 60L -> "${minutes / 60L} 小时前"
+        else -> "${minutes / (24L * 60L)} 天前"
+    }
+}
+
 @Composable
 private fun ProbeProgressCard(progress: ProbeProgress, onCancel: () -> Unit) {
     Row(
@@ -311,7 +358,7 @@ private fun ProbeProgressCard(progress: ProbeProgress, onCancel: () -> Unit) {
             )
             Text(
                 when {
-                    progress.cancelling -> "等待当前线路结束"
+                    progress.cancelling -> "正在停止当前测速…"
                     progress.currentName.isNotBlank() ->
                         "当前 ${progress.currentName} · 已可用 ${progress.available}"
                     else -> "准备中…"

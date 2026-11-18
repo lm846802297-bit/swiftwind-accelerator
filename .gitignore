@@ -9,4 +9,6 @@ captures/
 .cxx/
 *.jks
 *.keystore
+keystore.properties
+*.apk
 !app/debug.keystore

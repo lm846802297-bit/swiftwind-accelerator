@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLogger.install(this)
         pendingProbe = savedInstanceState?.getBoolean(KEY_PENDING_PROBE) ?: false
         WindowCompat.setDecorFitsSystemWindows(window, false)
 

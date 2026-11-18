@@ -29,6 +29,33 @@
 
 APK 输出：`app/build/outputs/apk/debug/app-debug.apk`
 
+### 发布构建
+
+1. 将正式 keystore 放到本地，创建 `keystore.properties`（不要提交到仓库）：
+
+```properties
+storeFile=C:/path/to/huayi-release.jks
+storePassword=你的密码
+keyAlias=huayi
+keyPassword=你的密码
+```
+
+2. 执行：
+
+```bash
+gradle --no-daemon assembleRelease
+```
+
+APK 输出：`app/build/outputs/apk/release/app-release.apk`
+
+没有 `keystore.properties` 时，release 会回退到 debug 签名，仅适合本地验证，不能用于公开分发。
+
+## 隐私
+
+应用不收集账号、位置或使用行为数据，节点配置只保存在本机。详细说明见 [docs/PRIVACY.md](docs/PRIVACY.md)。
+
+崩溃日志写入应用专属目录 `Android/data/com.swiftwind.accelerator/files/crash-logs/`，不会自动上传。
+
 ## 免费节点说明
 
 「Cloudflare WARP」是 Cloudflare 提供的免费 WireGuard 服务。App 会在设备本地生成一对密钥并调用 WARP 注册接口，配置只保存在本机，不会上传到任何第三方服务器。

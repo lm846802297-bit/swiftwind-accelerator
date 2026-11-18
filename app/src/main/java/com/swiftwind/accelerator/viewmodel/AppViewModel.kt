@@ -1,6 +1,10 @@
 package com.swiftwind.accelerator.viewmodel
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -32,6 +36,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val MAX_FAILOVER_CANDIDATES = 2
+
 data class ProbeProgress(
     val done: Int = 0,
     val total: Int = 0,
@@ -47,6 +53,7 @@ data class UiState(
     val stats: TunnelStats = TunnelStats(),
     val busy: Boolean = false,
     val health: Map<String, NodeHealth> = emptyMap(),
+    val healthCheckedAt: Map<String, Long> = emptyMap(),
     val quality: Map<String, NodeQuality> = emptyMap(),
     val probeProgress: ProbeProgress? = null
 ) {
@@ -67,6 +74,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var statsJob: Job? = null
     private var probeJob: Job? = null
 
+    private val connectivityManager = application.applicationContext
+        .getSystemService(ConnectivityManager::class.java)
+    private val underlyingNetworks = LinkedHashSet<Network>()
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkMonitorReady = false
+    private var networkReconnectJob: Job? = null
+
     init {
         val nodes = NodeStore.loadNodes()
         val savedSelected = NodeStore.selectedId
@@ -84,9 +98,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.update { it.copy(vpnState = state) }
                 when (state) {
                     is VpnState.Connected -> {
-                        // 连接成功后用实际连接结果刷新体检时可能过期的“不可用”标签。
-                        val selectedId = _ui.value.selectedId
-                        if (selectedId != null) markHealthy(selectedId)
+                        // 连接成功后的健康刷新由实际发起连接的一方写入，
+                        // 避免自动换线时把失败的原节点误标成“可用”。
                         startStatsPolling()
                     }
                     is VpnState.Connecting, is VpnState.Disconnecting -> Unit
@@ -99,6 +112,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         TunnelController.syncState()
+        if (TunnelController.state.value is VpnState.Connected) {
+            _ui.value.selectedId?.let { markHealthy(it) }
+            startStatsPolling()
+        }
+        startNetworkMonitoring()
     }
 
     fun fetchWarpNode() {
@@ -139,6 +157,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         nodes = merged,
                         selectedId = selected,
                         health = emptyMap(),
+                        healthCheckedAt = emptyMap(),
                         quality = emptyMap()
                     )
                 }
@@ -174,6 +193,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 busy = true,
                 probeProgress = ProbeProgress(total = total),
                 health = nodes.associate { node -> node.id to NodeHealth.CHECKING },
+                healthCheckedAt = emptyMap(),
                 quality = emptyMap()
             )
         }
@@ -214,6 +234,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         val progress = state.probeProgress ?: ProbeProgress(total = total)
                         state.copy(
                             health = state.health + (node.id to if (success) NodeHealth.OK else NodeHealth.FAIL),
+                            healthCheckedAt = state.healthCheckedAt + (node.id to System.currentTimeMillis()),
                             quality = if (result != null) {
                                 state.quality + (node.id to result.toQuality())
                             } else {
@@ -365,6 +386,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         val node = _ui.value.nodes.firstOrNull { it.id == id } ?: return
         if (_ui.value.selectedId == id) return
+        networkReconnectJob?.cancel()
+        networkReconnectJob = null
         when (TunnelController.state.value) {
             is VpnState.Connecting, is VpnState.Disconnecting -> {
                 notify("正在切换连接，请稍后再切换节点")
@@ -400,7 +423,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             TunnelController.state.value is VpnState.Error
                         ) {
                             val restored = runCatching {
-                                TunnelController.connect(previous.config, verifyData = false)
+                                TunnelController.connect(
+                                    previous.config,
+                                    verifyData = false,
+                                    handshakeTimeoutMs = 1200L
+                                )
                             }
                             if (restored.isSuccess) {
                                 markHealthy(previous.id)
@@ -484,16 +511,138 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             else -> Unit
         }
         viewModelScope.launch {
-            runCatching { TunnelController.connect(node.config) }
-                .onSuccess { markHealthy(node.id) }
-                .onFailure {
-                    markUnhealthy(node.id)
-                    notify(TunnelController.mapError(it))
-                }
+            networkReconnectJob?.cancel()
+            networkReconnectJob = null
+            val result = connectWithFailover(node, allowWarpFailover = true)
+            if (result.isFailure) {
+                val error = result.exceptionOrNull()
+                    ?: IllegalStateException("连接失败，请重试")
+                notify(TunnelController.mapError(error))
+            }
         }
     }
 
+    /**
+     * 连接失败时按健康度/质量分尝试少量 WARP 备用线路。
+     * 只对 WARP 免费节点自动换线；手动导入或订阅节点保持用户选择，避免偷偷改线路。
+     */
+    private suspend fun connectWithFailover(start: Node, allowWarpFailover: Boolean): Result<Node> {
+        var current = start
+        val attempted = mutableSetOf<String>()
+        while (true) {
+            attempted += current.id
+            try {
+                TunnelController.connect(current.config)
+                if (current.id != start.id) {
+                    NodeStore.selectedId = current.id
+                    _ui.update { it.copy(selectedId = current.id) }
+                    notify("已自动切换到“${current.name}”")
+                }
+                markHealthy(current.id)
+                return Result.success(current)
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                markUnhealthy(current.id)
+                if (!allowWarpFailover || start.source != NodeSource.WARP) {
+                    return Result.failure(t)
+                }
+                val next = failoverCandidates(start, attempted).firstOrNull()
+                    ?: return Result.failure(t)
+                notify("“${current.name}”未响应，尝试“${next.name}”…")
+                current = next
+            }
+        }
+    }
+
+    private fun failoverCandidates(start: Node, attempted: Set<String>): List<Node> {
+        if (start.source != NodeSource.WARP) return emptyList()
+        val health = _ui.value.health
+        val quality = _ui.value.quality
+        return _ui.value.nodes
+            .filter { it.source == NodeSource.WARP && it.id !in attempted }
+            .sortedWith(
+                compareByDescending<Node> {
+                    when (health[it.id]) {
+                        NodeHealth.OK -> 3
+                        NodeHealth.UNKNOWN -> 2
+                        NodeHealth.CHECKING -> 1
+                        NodeHealth.FAIL -> 0
+                        null -> 2
+                    }
+                }.thenByDescending { quality[it.id]?.score ?: 0 }
+            )
+            .take(MAX_FAILOVER_CANDIDATES)
+    }
+
+    private fun startNetworkMonitoring() {
+        val manager = connectivityManager ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
+                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
+                val added = synchronized(underlyingNetworks) { underlyingNetworks.add(network) }
+                if (added && networkMonitorReady) scheduleNetworkReconnect()
+            }
+
+            override fun onLost(network: Network) {
+                val removed = synchronized(underlyingNetworks) { underlyingNetworks.remove(network) }
+                val hasNetwork = synchronized(underlyingNetworks) { underlyingNetworks.isNotEmpty() }
+                if (removed && hasNetwork && networkMonitorReady) scheduleNetworkReconnect()
+            }
+        }
+        runCatching {
+            manager.registerNetworkCallback(request, callback)
+            networkCallback = callback
+        }
+        viewModelScope.launch {
+            delay(2000L)
+            networkMonitorReady = true
+        }
+    }
+
+    private fun scheduleNetworkReconnect() {
+        viewModelScope.launch {
+            if (!networkMonitorReady) return@launch
+            if (TunnelController.state.value !is VpnState.Connected) return@launch
+            if (synchronized(underlyingNetworks) { underlyingNetworks.isEmpty() }) return@launch
+            val node = _ui.value.selectedNode ?: return@launch
+            if (networkReconnectJob?.isActive == true) return@launch
+            networkReconnectJob = launch reconnect@{
+                try {
+                    // 网络切换后系统 VPN 的底层 socket 需要一点时间稳定，避免刚切就握手。
+                    delay(1200L)
+                    if (TunnelController.state.value !is VpnState.Connected) return@reconnect
+                    notify("网络已切换，正在重连…")
+                    val result = connectWithFailover(node, allowWarpFailover = true)
+                    if (result.isFailure) {
+                        val error = result.exceptionOrNull()
+                            ?: IllegalStateException("网络切换后重连失败")
+                        notify("网络切换后重连失败：${TunnelController.mapError(error)}")
+                    } else {
+                        notify("网络切换后已恢复连接")
+                    }
+                } finally {
+                    networkReconnectJob = null
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        networkReconnectJob?.cancel()
+        networkCallback?.let { callback ->
+            runCatching { connectivityManager?.unregisterNetworkCallback(callback) }
+        }
+        networkCallback = null
+        super.onCleared()
+    }
+
     fun disconnect() {
+        networkReconnectJob?.cancel()
+        networkReconnectJob = null
         viewModelScope.launch {
             runCatching { TunnelController.disconnect() }
                 .onFailure { notify(TunnelController.mapError(it)) }
@@ -537,21 +686,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun markUnhealthy(id: String) {
         _ui.update { state ->
-            if (state.health[id] == NodeHealth.FAIL) {
-                state
-            } else {
-                state.copy(health = state.health + (id to NodeHealth.FAIL))
-            }
+            state.copy(
+                health = state.health + (id to NodeHealth.FAIL),
+                healthCheckedAt = state.healthCheckedAt + (id to System.currentTimeMillis())
+            )
         }
     }
 
     private fun markHealthy(id: String) {
         _ui.update { state ->
-            if (state.health[id] == NodeHealth.OK) {
-                state
-            } else {
-                state.copy(health = state.health + (id to NodeHealth.OK))
-            }
+            state.copy(
+                health = state.health + (id to NodeHealth.OK),
+                healthCheckedAt = state.healthCheckedAt + (id to System.currentTimeMillis())
+            )
         }
     }
 
