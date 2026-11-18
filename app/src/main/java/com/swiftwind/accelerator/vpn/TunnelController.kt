@@ -2,6 +2,7 @@ package com.swiftwind.accelerator.vpn
 
 import android.content.Context
 import android.os.SystemClock
+import android.util.Log
 import com.wireguard.android.backend.BackendException
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
@@ -12,21 +13,33 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.StringReader
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 object TunnelController {
     private const val TUNNEL_NAME = "swiftwind"
     private const val SPEED_TEST_URL = "https://speed.cloudflare.com/__down?bytes=262144"
+    private const val VERIFY_URL = "https://1.1.1.1/cdn-cgi/trace"
     private val speedClient = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
         .callTimeout(8, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .build()
+    private val verifyClient = OkHttpClient.Builder()
+        .connectTimeout(2, TimeUnit.SECONDS)
+        .readTimeout(2, TimeUnit.SECONDS)
+        .callTimeout(3, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .build()
 
@@ -72,7 +85,7 @@ object TunnelController {
         }
     }
 
-    suspend fun connect(configText: String) = withContext(Dispatchers.IO) {
+    suspend fun connect(configText: String, verifyData: Boolean = true) = withContext(Dispatchers.IO) {
         synchronized(operationGate) {
             if (probing) throw IllegalStateException("正在体检节点，请稍后再连接")
             when (_state.value) {
@@ -83,9 +96,11 @@ object TunnelController {
             _state.value = VpnState.Connecting
         }
         try {
+            val connectStartedAt = SystemClock.elapsedRealtime()
             val config: Config = Config.parse(BufferedReader(StringReader(configText)))
             // 用 backend 当前是否已有隧道来判断首次连接还是“已连接状态下切换节点”。
             val hadTunnel = isRunning()
+            Log.d("SwiftWindSwitch", "connect start hadTunnel=$hadTunnel")
             if (hadTunnel) {
                 // GoBackend 自带的 DOWN→UP 只隔几十毫秒，ColorOS/Realme 的系统 VPN
                 // NetworkAgent 来不及回收，会出现新隧道刚起就被系统断开的竞态。
@@ -93,19 +108,38 @@ object TunnelController {
                 runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
                 awaitRunning(false, 1500L)
                 delay(400L)
+                Log.d("SwiftWindSwitch", "connect old-down +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
             }
             startTunnel(config)
+            Log.d("SwiftWindSwitch", "connect tunnel-up +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
             // 隧道“UP”不等于节点可用：必须收到 WireGuard 握手，否则会把手动选择的
             // 死节点显示成“已连接”，用户实际没有网络。
-            if (awaitHandshake(4000L) < 0L) {
+            val handshake = awaitHandshake(2000L)
+            Log.d("SwiftWindSwitch", "connect handshake=$handshake +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
+            if (handshake < 0L) {
                 runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
-                awaitRunning(false, 1200L)
+                awaitRunning(false, 800L)
+                Log.d("SwiftWindSwitch", "connect dead-clean +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
                 val error = IllegalStateException("节点未响应，无法建立有效连接")
+                _state.value = VpnState.Error(mapError(error))
+                throw error
+            }
+            // 握手成功也不代表能上网：再做一次极小的 HTTPS 请求确认数据面。
+            // 这同时让“连接成功”后的健康标签有真实依据。
+            // 回滚原节点时跳过这一步：它刚刚才验证过，跳过可以把失败切换的恢复时间
+            // 从约 8 秒压到约 5 秒，避免用户为一次误点等太久。
+            val verified = if (verifyData) verifyTraffic() else true
+            Log.d("SwiftWindSwitch", "connect verify=$verified +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
+            if (!verified) {
+                runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                awaitRunning(false, 800L)
+                val error = IllegalStateException("节点握手成功，但无法传输数据")
                 _state.value = VpnState.Error(mapError(error))
                 throw error
             }
             startedAt = SystemClock.elapsedRealtime()
             _state.value = VpnState.Connected
+            Log.d("SwiftWindSwitch", "connect done +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
         } catch (t: Throwable) {
             if (_state.value is VpnState.Error) throw t
             // GoBackend 在切换配置失败时会尝试恢复旧隧道；如果旧隧道确实还在，
@@ -260,50 +294,79 @@ object TunnelController {
         return -1L
     }
 
+    /** 通过隧道请求一个极小页面，确认握手后真的能收到应用层数据。 */
+    private fun verifyTraffic(): Boolean = runCatching {
+        val request = Request.Builder()
+            .url(VERIFY_URL)
+            .header("User-Agent", "SwiftWind/1.0")
+            .build()
+        verifyClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@use false
+            val body = response.body?.string() ?: return@use false
+            body.isNotBlank()
+        }
+    }.getOrDefault(false)
+
     /**
      * 隧道内下载 256KB 样本，返回（首字节延迟 ms，吞吐 kbps）。
      * 吞吐从收到首个响应字节开始计时，避免把 TLS/TTFB 算进下载速度；
      * 超时导致的半截样本仍按已收字节计算，测速失败只扣吞吐分。
+     *
+     * 使用 OkHttp 异步回调，让体检取消时可以立即 call.cancel()，
+     * 不再等一次慢速下载自然结束。
      */
-    private fun measureSpeed(): Pair<Long, Int> {
+    private suspend fun measureSpeed(): Pair<Long, Int> = suspendCancellableCoroutine { cont ->
         val started = SystemClock.elapsedRealtime()
-        return runCatching {
-            val request = Request.Builder()
-                .url(SPEED_TEST_URL)
-                .header("User-Agent", "SwiftWind/1.0")
-                .build()
-            speedClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use 0L to 0
-                val body = response.body ?: return@use 0L to 0
-                val httpLatencyMs = (SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
-                var firstByteAt = 0L
-                var totalBytes = 0L
-                val buffer = ByteArray(8192)
-                val input = body.byteStream()
-                try {
-                    while (true) {
-                        val read = try {
-                            input.read(buffer)
-                        } catch (_: IOException) {
-                            break
-                        }
-                        if (read <= 0) break
-                        if (firstByteAt == 0L) firstByteAt = SystemClock.elapsedRealtime()
-                        totalBytes += read
-                    }
-                } finally {
-                    runCatching { input.close() }
-                }
-                val lastByteAt = SystemClock.elapsedRealtime()
-                val bodyMs = if (firstByteAt > 0L) {
-                    (lastByteAt - firstByteAt).coerceAtLeast(1L)
-                } else {
-                    1L
-                }
-                val kbps = (totalBytes * 8L / bodyMs).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                httpLatencyMs to kbps
+        val request = Request.Builder()
+            .url(SPEED_TEST_URL)
+            .header("User-Agent", "SwiftWind/1.0")
+            .build()
+        val call = speedClient.newCall(request)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (cont.isActive) cont.resume(0L to 0)
             }
-        }.getOrDefault(0L to 0)
+
+            override fun onResponse(call: Call, response: Response) {
+                val result = runCatching {
+                    response.use { resp ->
+                        if (!resp.isSuccessful) return@use 0L to 0
+                        val body = resp.body ?: return@use 0L to 0
+                        val httpLatencyMs = (SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
+                        var firstByteAt = 0L
+                        var totalBytes = 0L
+                        val buffer = ByteArray(8192)
+                        val input = body.byteStream()
+                        try {
+                            while (true) {
+                                val read = try {
+                                    input.read(buffer)
+                                } catch (_: IOException) {
+                                    break
+                                }
+                                if (read <= 0) break
+                                if (firstByteAt == 0L) firstByteAt = SystemClock.elapsedRealtime()
+                                totalBytes += read
+                            }
+                        } finally {
+                            runCatching { input.close() }
+                        }
+                        val lastByteAt = SystemClock.elapsedRealtime()
+                        val bodyMs = if (firstByteAt > 0L) {
+                            (lastByteAt - firstByteAt).coerceAtLeast(1L)
+                        } else {
+                            1L
+                        }
+                        val kbps = (totalBytes * 8L / bodyMs)
+                            .coerceAtMost(Int.MAX_VALUE.toLong())
+                            .toInt()
+                        httpLatencyMs to kbps
+                    }
+                }.getOrDefault(0L to 0)
+                if (cont.isActive) cont.resume(result)
+            }
+        })
     }
 
     fun snapshot(): TunnelStats {

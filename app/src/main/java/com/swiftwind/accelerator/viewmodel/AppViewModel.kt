@@ -1,6 +1,7 @@
 package com.swiftwind.accelerator.viewmodel
 
 import android.app.Application
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -82,7 +83,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             TunnelController.state.collect { state ->
                 _ui.update { it.copy(vpnState = state) }
                 when (state) {
-                    is VpnState.Connected -> startStatsPolling()
+                    is VpnState.Connected -> {
+                        // 连接成功后用实际连接结果刷新体检时可能过期的“不可用”标签。
+                        val selectedId = _ui.value.selectedId
+                        if (selectedId != null) markHealthy(selectedId)
+                        startStatsPolling()
+                    }
                     is VpnState.Connecting, is VpnState.Disconnecting -> Unit
                     else -> {
                         stopStatsPolling()
@@ -369,12 +375,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.update { it.copy(busy = true) }
                 viewModelScope.launch {
                     val previous = _ui.value.nodes.firstOrNull { it.id == _ui.value.selectedId }
+                    val switchStartedAt = SystemClock.elapsedRealtime()
+                    Log.d("SwiftWindSwitch", "switch start target=${node.name} from=${previous?.name}")
                     try {
                         TunnelController.connect(node.config)
                         NodeStore.selectedId = id
                         _ui.update { it.copy(selectedId = id) }
+                        markHealthy(id)
+                        Log.d(
+                            "SwiftWindSwitch",
+                            "switch success +${SystemClock.elapsedRealtime() - switchStartedAt}ms"
+                        )
                     } catch (t: Throwable) {
+                        markUnhealthy(id)
                         val originalError = TunnelController.mapError(t)
+                        Log.d(
+                            "SwiftWindSwitch",
+                            "switch target failed +${SystemClock.elapsedRealtime() - switchStartedAt}ms: $originalError"
+                        )
                         // 切换会先拆掉旧隧道；新节点握手失败时尽量把原节点接回来，
                         // 避免用户点错一个死节点后直接断网。
                         if (previous != null &&
@@ -382,11 +400,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             TunnelController.state.value is VpnState.Error
                         ) {
                             val restored = runCatching {
-                                TunnelController.connect(previous.config)
+                                TunnelController.connect(previous.config, verifyData = false)
                             }
                             if (restored.isSuccess) {
+                                markHealthy(previous.id)
+                                Log.d(
+                                    "SwiftWindSwitch",
+                                    "switch rollback +${SystemClock.elapsedRealtime() - switchStartedAt}ms"
+                                )
                                 notify("切换失败，已恢复“${previous.name}”")
                             } else {
+                                markUnhealthy(previous.id)
                                 notify("$originalError；原节点恢复失败，请重新连接")
                             }
                         } else {
@@ -461,7 +485,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             runCatching { TunnelController.connect(node.config) }
-                .onFailure { notify(TunnelController.mapError(it)) }
+                .onSuccess { markHealthy(node.id) }
+                .onFailure {
+                    markUnhealthy(node.id)
+                    notify(TunnelController.mapError(it))
+                }
         }
     }
 
@@ -505,6 +533,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopStatsPolling() {
         statsJob?.cancel()
         statsJob = null
+    }
+
+    private fun markUnhealthy(id: String) {
+        _ui.update { state ->
+            if (state.health[id] == NodeHealth.FAIL) {
+                state
+            } else {
+                state.copy(health = state.health + (id to NodeHealth.FAIL))
+            }
+        }
+    }
+
+    private fun markHealthy(id: String) {
+        _ui.update { state ->
+            if (state.health[id] == NodeHealth.OK) {
+                state
+            } else {
+                state.copy(health = state.health + (id to NodeHealth.OK))
+            }
+        }
     }
 
     private fun notify(message: String) {
