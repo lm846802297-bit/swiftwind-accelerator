@@ -368,12 +368,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 // 已连接时先真正切换隧道，成功后再落选中项，避免 UI 与隧道不一致。
                 _ui.update { it.copy(busy = true) }
                 viewModelScope.launch {
+                    val previous = _ui.value.nodes.firstOrNull { it.id == _ui.value.selectedId }
                     try {
                         TunnelController.connect(node.config)
                         NodeStore.selectedId = id
                         _ui.update { it.copy(selectedId = id) }
                     } catch (t: Throwable) {
-                        notify(TunnelController.mapError(t))
+                        val originalError = TunnelController.mapError(t)
+                        // 切换会先拆掉旧隧道；新节点握手失败时尽量把原节点接回来，
+                        // 避免用户点错一个死节点后直接断网。
+                        if (previous != null &&
+                            previous.id != id &&
+                            TunnelController.state.value is VpnState.Error
+                        ) {
+                            val restored = runCatching {
+                                TunnelController.connect(previous.config)
+                            }
+                            if (restored.isSuccess) {
+                                notify("切换失败，已恢复“${previous.name}”")
+                            } else {
+                                notify("$originalError；原节点恢复失败，请重新连接")
+                            }
+                        } else {
+                            notify(originalError)
+                        }
                     } finally {
                         _ui.update { it.copy(busy = false) }
                     }

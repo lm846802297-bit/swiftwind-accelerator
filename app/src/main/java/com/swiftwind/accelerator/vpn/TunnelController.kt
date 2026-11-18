@@ -95,9 +95,19 @@ object TunnelController {
                 delay(400L)
             }
             startTunnel(config)
+            // 隧道“UP”不等于节点可用：必须收到 WireGuard 握手，否则会把手动选择的
+            // 死节点显示成“已连接”，用户实际没有网络。
+            if (awaitHandshake(4000L) < 0L) {
+                runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                awaitRunning(false, 1200L)
+                val error = IllegalStateException("节点未响应，无法建立有效连接")
+                _state.value = VpnState.Error(mapError(error))
+                throw error
+            }
             startedAt = SystemClock.elapsedRealtime()
             _state.value = VpnState.Connected
         } catch (t: Throwable) {
+            if (_state.value is VpnState.Error) throw t
             // GoBackend 在切换配置失败时会尝试恢复旧隧道；如果旧隧道确实还在，
             // 不能让 UI 停在“失败/未连接”，否则会出现界面与实际 VPN 状态相反。
             val stillRunning = runCatching {
@@ -175,15 +185,22 @@ object TunnelController {
             }
             _state.value = VpnState.Disconnecting
         }
+        var stopped = true
         try {
             if (::backend.isInitialized) {
                 backend.setState(tunnel, Tunnel.State.DOWN, null)
-                awaitRunning(false, 1500L)
+                stopped = awaitRunning(false, 1500L)
             }
         } catch (_: Throwable) {
-        } finally {
+            stopped = !isRunning()
+        }
+        if (stopped) {
             startedAt = 0L
             _state.value = VpnState.Idle
+        } else {
+            // 不能把“DOWN 超时但隧道仍在运行”报成未连接，否则界面关了、VPN 还在。
+            _state.value = VpnState.Connected
+            throw IllegalStateException("无法关闭 VPN 隧道，请重试")
         }
     }
 

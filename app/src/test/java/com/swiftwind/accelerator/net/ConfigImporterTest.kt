@@ -59,6 +59,15 @@ class ConfigImporterTest {
     }
 
     @Test
+    fun splitsUtf8BomConfigs() {
+        val parts = ConfigImporter.split("\uFEFF$first\n\n\uFEFF$second")
+
+        assertEquals("带 UTF-8 BOM 的订阅也应正常拆分", 2, parts.size)
+        assertTrue(parts[0].contains("private-key-one"))
+        assertTrue(parts[1].contains("private-key-two"))
+    }
+
+    @Test
     fun fingerprintNormalizesLineEndings() {
         val lf = first
         val crlf = first.replace("\n", "\r\n")

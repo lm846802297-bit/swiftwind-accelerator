@@ -8,7 +8,9 @@ import java.io.StringReader
 object ConfigImporter {
 
     fun split(raw: String): List<String> {
-        var text = raw.trim()
+        // 部分订阅/配置文件带 UTF-8 BOM；BOM 会让 "[Interface]" 判断失败，
+        // 随后被误当成 Base64 而整份丢弃。
+        var text = raw.replace("\uFEFF", "").trim()
         if (text.isEmpty()) return emptyList()
 
         if (!text.contains("[Interface]", ignoreCase = true)) {
