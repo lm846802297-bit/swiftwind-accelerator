@@ -214,8 +214,10 @@ object TunnelController {
                     return@withContext ProbeResult(healthy = false)
                 }
                 val speed = measureSpeed()
+                // 只有握手成功还不够：必须真的通过隧道收到测速数据，否则会把
+                // “能握手但无法上网”的节点误标为可用。
                 ProbeResult(
-                    healthy = true,
+                    healthy = speed.second > 0,
                     handshakeMs = handshakeMs,
                     httpLatencyMs = speed.first,
                     throughputKbps = speed.second
