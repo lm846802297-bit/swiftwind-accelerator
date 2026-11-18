@@ -55,6 +55,8 @@ APK 输出：`app/build/outputs/apk/release/app-release.apk`
 
 应用不收集账号、位置或使用行为数据，节点配置只保存在本机。详细说明见 [docs/PRIVACY.md](docs/PRIVACY.md)。
 
+公开可访问版本：<https://aka.doubaocdn.com/s/9EX5YNoJts>（`docs/privacy.html` 的在线副本，用于应用商店资料或隐私政策链接）。
+
 崩溃日志写入应用专属目录 `Android/data/com.swiftwind.accelerator/files/crash-logs/`，不会自动上传。
 
 ## 免费节点说明

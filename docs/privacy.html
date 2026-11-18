@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>花意加速器 · 隐私说明</title>
+    <style>
+        :root { color-scheme: light; }
+        body { margin: 0; background: #f7f4f6; color: #30262c; font: 16px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+        main { max-width: 760px; margin: 0 auto; padding: 48px 24px 72px; }
+        h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: .02em; }
+        .meta { margin: 0 0 36px; color: #7b6a75; font-size: 14px; }
+        h2 { margin: 32px 0 10px; font-size: 18px; color: #e0447b; }
+        p, li { margin: 8px 0; }
+        ul { padding-left: 1.2em; }
+        code { padding: 1px 5px; border-radius: 5px; background: #efe8ec; color: #51424b; font-size: .92em; }
+        .card { padding: 18px 20px; border: 1px solid #ead9e2; border-radius: 14px; background: #fff; }
+        .note { color: #6d5c67; font-size: 14px; }
+        hr { border: 0; border-top: 1px solid #ead9e2; margin: 32px 0; }
+    </style>
+</head>
+<body>
+<main>
+    <h1>花意加速器 · 隐私说明</h1>
+    <p class="meta">更新日期：2026-11-18 · 包名 <code>com.swiftwind.accelerator</code></p>
+
+    <div class="card">
+        <p>花意加速器是一个本地运行的 WireGuard 客户端，不提供账号、云端同步或广告服务。本说明解释应用会处理哪些数据、为什么处理，以及数据保存在哪里。</p>
+    </div>
+
+    <h2>我们不收集什么</h2>
+    <ul>
+        <li>不收集账号、手机号、通讯录、位置、设备标识或使用行为数据。</li>
+        <li>不接入广告 SDK、统计 SDK 或第三方追踪服务。</li>
+        <li>不把节点配置、连接记录或流量统计上传到开发者服务器。</li>
+    </ul>
+
+    <h2>数据保存在哪里</h2>
+    <ul>
+        <li>WireGuard 密钥、节点配置、订阅链接和当前选中节点只保存在本机应用的私有存储中。</li>
+        <li>应用崩溃时会在本机应用专属目录写入崩溃文本，用于排查问题；不会自动上传。</li>
+        <li>卸载应用会删除上述本地数据。</li>
+    </ul>
+
+    <h2>网络请求</h2>
+    <ul>
+        <li>点击「获取」时，应用会向 Cloudflare WARP 注册接口发送本机生成的 WireGuard 公钥，以获得免费 WARP 配置。Cloudflare 的隐私政策适用于该请求。</li>
+        <li>导入的订阅链接由用户提供；应用只按该链接拉取配置。</li>
+        <li>连接期间，流量经用户选择的 WireGuard 节点转发。节点运营方可能看到连接元数据，这是 VPN 服务的固有属性。</li>
+    </ul>
+
+    <h2>权限</h2>
+    <ul>
+        <li><code>INTERNET</code>：注册 WARP、拉取订阅、建立隧道。</li>
+        <li><code>ACCESS_NETWORK_STATE</code>：监听网络切换，用于断网恢复后自动重连。</li>
+        <li><code>FOREGROUND_SERVICE</code> / <code>FOREGROUND_SERVICE_SPECIAL_USE</code>：连接期间保持 VPN 前台服务，降低 Android 在后台回收进程的概率。</li>
+        <li><code>POST_NOTIFICATIONS</code>：展示“VPN 已连接，网络保护中”的前台服务状态通知。拒绝该权限不影响连接，只是不显示该通知。</li>
+        <li>VPN 授权由 Android 系统弹窗授予；应用不会自行绕过。</li>
+    </ul>
+
+    <h2>用户控制</h2>
+    <ul>
+        <li>可随时在应用内断开连接，或在系统设置中撤销 VPN 授权。</li>
+        <li>可删除节点、订阅和本地崩溃记录。</li>
+        <li>本应用不提供付费、账号或云端同步功能。</li>
+    </ul>
+
+    <h2>联系</h2>
+    <p>如对隐私说明有疑问，请通过项目仓库的 Issue 联系维护者。</p>
+
+    <hr>
+    <p class="note">本页面为花意加速器的隐私说明。应用本身不包含第三方统计或广告组件。</p>
+</main>
+</body>
+</html>

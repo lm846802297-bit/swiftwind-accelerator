@@ -2,6 +2,8 @@
 
 更新日期：2026-11-18
 
+公开可访问版本：<https://aka.doubaocdn.com/s/9EX5YNoJts>
+
 花意加速器（包名 `com.swiftwind.accelerator`）是一个本地运行的 WireGuard 客户端。
 
 ## 我们收集什么
