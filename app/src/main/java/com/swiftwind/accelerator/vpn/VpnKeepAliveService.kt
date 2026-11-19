@@ -109,7 +109,7 @@ class VpnKeepAliveService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText("VPN 已连接，网络保护中")
+            .setContentText("加密隧道运行中")
             .setContentIntent(openApp)
             .setOngoing(true)
             .setShowWhen(false)
