@@ -16,10 +16,12 @@ data class Node(
     val config: String,
     val endpoint: String,
     val source: NodeSource,
-    // 最近一次体检检测到的出口国家/地区（ISO 3166-1 alpha-2）。
-    // WARP 是 Anycast，出口会随网络和调度变化，所以这里只作为“上次体检出口”，
+    // 最近一次检测到的出口国家/地区（ISO 3166-1 alpha-2）。
+    // WARP 是 Anycast，出口会随网络和调度变化，所以这里只作为“最近检测出口”，
     // 不把它当成节点永久归属。
     val regionCode: String? = null,
+    // 中国出口的省/市等细化地区，例如“上海”“广东 · 深圳”。
+    val regionDetail: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
@@ -29,6 +31,7 @@ data class Node(
         put("endpoint", endpoint)
         put("source", source.name)
         put("regionCode", regionCode ?: JSONObject.NULL)
+        put("regionDetail", regionDetail ?: JSONObject.NULL)
         put("createdAt", createdAt)
     }
 
@@ -47,6 +50,11 @@ data class Node(
                     .trim()
                     .uppercase()
                     .takeIf { it.length == 2 }
+            },
+            regionDetail = if (json.isNull("regionDetail")) {
+                null
+            } else {
+                json.optString("regionDetail").trim().takeIf { it.isNotBlank() }
             },
             createdAt = json.optLong("createdAt", System.currentTimeMillis())
         )

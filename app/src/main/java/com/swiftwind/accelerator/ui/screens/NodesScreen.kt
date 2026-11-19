@@ -479,7 +479,7 @@ private fun NodeRow(
 ) {
     val expired = checkedAt != null && now - checkedAt > NODE_HEALTH_TTL_MS
     val regionFresh = checkedAt != null && !expired
-    val regionLabel = EgressRegion.label(node, regionFresh, checkedAt != null)
+    val regionLabel = EgressRegion.summary(node, regionFresh, checkedAt != null)
     Surface(
         modifier = Modifier
             .fillMaxWidth()

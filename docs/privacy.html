@@ -22,7 +22,7 @@
 <body>
 <main>
     <h1>花意加速器 · 隐私说明</h1>
-    <p class="meta">更新日期：2026-11-18 · 包名 <code>com.swiftwind.accelerator</code></p>
+    <p class="meta">更新日期：2026-11-19 · 包名 <code>com.swiftwind.accelerator</code></p>
 
     <div class="card">
         <p>花意加速器是一个本地运行的 WireGuard 客户端，不提供账号、云端同步或广告服务。本说明解释应用会处理哪些数据、为什么处理，以及数据保存在哪里。</p>
@@ -45,6 +45,7 @@
     <h2>网络请求</h2>
     <ul>
         <li>点击「获取」时，应用会向 Cloudflare WARP 注册接口发送本机生成的 WireGuard 公钥，以获得免费 WARP 配置。Cloudflare 的隐私政策适用于该请求。</li>
+        <li>为在节点上显示中国出口的省/市，连接成功或体检时会通过当前隧道把出口 IP 发送到 <code>ipapi.co</code> 查询地理位置；不发送设备标识、节点配置或流量内容。查询失败时只显示国家/地区。</li>
         <li>导入的订阅链接由用户提供；应用只按该链接拉取配置。</li>
         <li>连接期间，流量经用户选择的 WireGuard 节点转发。节点运营方可能看到连接元数据，这是 VPN 服务的固有属性。</li>
     </ul>

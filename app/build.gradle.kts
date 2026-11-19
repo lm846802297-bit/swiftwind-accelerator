@@ -81,6 +81,12 @@ android {
     }
 }
 
+// 单进程跑单测，避免 Gradle 并行拉起多个 JVM 把本机内存打满。
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    maxParallelForks = 1
+    jvmArgs("-Xmx512m")
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")

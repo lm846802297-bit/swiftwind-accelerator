@@ -39,8 +39,10 @@ data class ProbeResult(
     val httpLatencyMs: Long = 0L,
     val throughputKbps: Int = 0,
     // 这次真实隧道探测里 Cloudflare trace 返回的出口国家/地区。
-    // 只作为“上次体检出口”，不等于节点永久归属。
-    val egressCountry: String? = null
+    // 只作为“最近检测出口”，不等于节点永久归属。
+    val egressCountry: String? = null,
+    // 中国出口的省/市细化地区，例如“上海”“广东 · 深圳”。
+    val egressDetail: String? = null
 ) {
     val score: Int
         get() {

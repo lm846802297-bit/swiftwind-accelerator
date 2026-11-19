@@ -47,6 +47,14 @@ object TunnelController {
         .retryOnConnectionFailure(false)
         .build()
 
+    private val geoClient = OkHttpClient.Builder()
+        .connectTimeout(2, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .callTimeout(5, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .build()
+    private val regionDetailCache = mutableMapOf<String, String>()
+
     // GoBackend 是进程级单例，内部只持有 applicationContext，不存在 Activity 泄漏。
     @SuppressLint("StaticFieldLeak")
     private lateinit var backend: GoBackend
@@ -124,11 +132,12 @@ object TunnelController {
 
     /**
      * 读取当前隧道实际的 Cloudflare 出口国家/地区。
-     * 这不是固定归属，只用于节点行上的“上次体检出口”。
+     * 对中国出口会进一步查询出口 IP 的省/市，其他地区只保留国家级。
+     * 这不是固定归属，只用于节点行上的“最近检测出口”。
      */
-    suspend fun currentEgressCountry(): String? = withContext(Dispatchers.IO) {
+    suspend fun currentEgressLocation(): EgressRegion.EgressLocation? = withContext(Dispatchers.IO) {
         if (!isRunning()) return@withContext null
-        fetchEgressCountry()
+        fetchEgressLocation()
     }
 
     /**
@@ -457,14 +466,15 @@ object TunnelController {
                 val dataOk = speed.second > 0 || verifyTraffic()
                 // 只有握手成功还不够：必须真的通过隧道收到应用层数据，否则会把
                 // “能握手但无法上网”的节点误标为可用。
-                // 数据面可用时再读一次 trace，记录本次实际出口国家。
-                val egressCountry = if (dataOk) fetchEgressCountry() else null
+                // 数据面可用时再读一次 trace，记录本次实际出口国家/地区。
+                val egressLocation = if (dataOk) fetchEgressLocation() else null
                 ProbeResult(
                     healthy = dataOk,
                     handshakeMs = handshakeMs,
                     httpLatencyMs = speed.first,
                     throughputKbps = speed.second,
-                    egressCountry = egressCountry
+                    egressCountry = egressLocation?.countryCode,
+                    egressDetail = egressLocation?.detail
                 )
             } finally {
                 val cleanupStartedAt = SystemClock.elapsedRealtime()
@@ -510,34 +520,50 @@ object TunnelController {
         return -1L
     }
 
-    /** 通过隧道请求 Cloudflare trace，并解析 loc=XX 出口地区。 */
-    private suspend fun fetchEgressCountry(): String? = suspendCancellableCoroutine { cont ->
-        if (!isRunning()) {
-            if (cont.isActive) cont.resume(null)
-        } else {
+    /** 通过隧道请求 Cloudflare trace，并按需补充中国的省/市。 */
+    private suspend fun fetchEgressLocation(): EgressRegion.EgressLocation? = withContext(Dispatchers.IO) {
+        if (!isRunning()) return@withContext null
+        val trace = runCatching {
             val request = Request.Builder()
                 .url(VERIFY_URL)
                 .header("User-Agent", "SwiftWind/1.0")
                 .build()
-            val call = verifyClient.newCall(request)
-            cont.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    if (cont.isActive) cont.resume(null)
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    val country = runCatching {
-                        response.use { resp ->
-                            if (!resp.isSuccessful) return@use null
-                            EgressRegion.parseTraceLoc(resp.body?.string())
-                        }
-                    }.getOrNull()
-                    val stable = if (isRunning()) country else null
-                    if (cont.isActive) cont.resume(stable)
-                }
-            })
+            verifyClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) response.body?.string() else null
+            }
+        }.getOrNull()
+        if (!isRunning()) return@withContext null
+        val country = EgressRegion.parseTraceLoc(trace) ?: return@withContext null
+        val detail = if (country == "CN") {
+            val ip = EgressRegion.parseTraceIp(trace)
+            if (ip != null) fetchChinaRegionDetail(ip) else null
+        } else {
+            null
         }
+        if (!isRunning()) return@withContext null
+        EgressRegion.EgressLocation(countryCode = country, detail = detail)
+    }
+
+    /**
+     * ipapi.co 的免费 HTTPS 接口。只在中国出口时调用，失败就退回国家级显示。
+     * 结果按出口 IP 缓存在进程内，避免体检时重复查询同一出口。
+     */
+    private fun fetchChinaRegionDetail(ip: String): String? {
+        synchronized(regionDetailCache) {
+            regionDetailCache[ip]?.let { return it }
+        }
+        val body = runCatching {
+            val request = Request.Builder()
+                .url("https://ipapi.co/$ip/json/")
+                .header("User-Agent", "SwiftWind/1.0")
+                .build()
+            geoClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) response.body?.string() else null
+            }
+        }.getOrNull() ?: return null
+        val detail = EgressRegion.parseGeoDetail(body) ?: return null
+        synchronized(regionDetailCache) { regionDetailCache[ip] = detail }
+        return detail
     }
 
     /** 通过隧道请求一个极小页面，确认握手后真的能收到应用层数据。 */

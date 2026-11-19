@@ -291,7 +291,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     if (result?.egressCountry != null) {
-                        updateNodeRegion(node.id, result.egressCountry)
+                        updateNodeRegion(node.id, result.egressCountry, result.egressDetail)
                     }
                     _ui.update { state ->
                         val progress = state.probeProgress ?: ProbeProgress(total = total)
@@ -1126,32 +1126,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 连接成功后顺带读取一次当前出口国家；它不挡连接流程，失败也不影响连接。
-     * WARP 的 Anycast 出口可能变化，因此只写入“上次体检出口”，并在体检过期后隐藏。
+     * 连接成功后顺带读取一次当前出口地区；它不挡连接流程，失败也不影响连接。
+     * WARP 的 Anycast 出口可能变化，因此只写入“最近检测出口”，并在体检过期后隐藏。
      */
     private fun detectCurrentRegion() {
         val nodeId = _ui.value.selectedId ?: return
         val generation = TunnelController.connectionGeneration()
         regionJob = viewModelScope.launch(Dispatchers.IO) {
-            val country = runCatching {
-                TunnelController.currentEgressCountry()
+            val location = runCatching {
+                TunnelController.currentEgressLocation()
             }.getOrNull() ?: return@launch
             if (TunnelController.state.value !is VpnState.Connected ||
                 TunnelController.connectionGeneration() != generation
             ) {
                 return@launch
             }
-            updateNodeRegion(nodeId, country)
+            updateNodeRegion(nodeId, location.countryCode, location.detail)
         }
     }
 
-    private fun updateNodeRegion(nodeId: String, rawCountry: String?) {
+    private fun updateNodeRegion(nodeId: String, rawCountry: String?, rawDetail: String? = null) {
         val country = EgressRegion.normalizeCode(rawCountry) ?: return
+        val detail = rawDetail?.trim()?.takeIf { it.isNotBlank() }
         var changed = false
         val updated = _ui.value.nodes.map { node ->
-            if (node.id == nodeId && node.regionCode != country) {
+            val nextDetail = detail ?: node.regionDetail?.takeIf { node.regionCode == country }
+            if (node.id == nodeId && (node.regionCode != country || node.regionDetail != nextDetail)) {
                 changed = true
-                node.copy(regionCode = country)
+                node.copy(regionCode = country, regionDetail = nextDetail)
             } else {
                 node
             }
@@ -1159,7 +1161,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (!changed) return
         NodeStore.saveNodes(updated)
         _ui.update { it.copy(nodes = updated) }
-        Log.d("SwiftWindRegion", "node=$nodeId egress=$country")
+        Log.d("SwiftWindRegion", "node=$nodeId egress=$country${detail?.let { " / $it" } ?: ""}")
     }
 
     private fun effectiveHealthFor(id: String, now: Long = System.currentTimeMillis()): NodeHealth {

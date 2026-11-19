@@ -216,7 +216,7 @@ private fun NodeSelector(node: Node?, onClick: () -> Unit) {
                     )
                     Text(
                         // 首页只展示最近一次检测结果；WARP 的出口可能随 Anycast 调度变化。
-                        EgressRegion.label(node, regionFresh = true, hasCheckedAt = true),
+                        EgressRegion.summary(node, regionFresh = true, hasCheckedAt = true),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
                         color = TextSecondary.copy(alpha = 0.6f),
                         maxLines = 1,
