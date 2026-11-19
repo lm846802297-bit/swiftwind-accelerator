@@ -41,6 +41,20 @@ class EgressRegionTest {
     }
 
     @Test
+    fun mapsSanJoseEdgeInsteadOfAnycastIpCountry() {
+        val trace = """
+            fl=123f
+            ip=104.28.208.136
+            loc=CN
+            colo=SJC
+            warp=on
+        """.trimIndent()
+        assertEquals("SJC", EgressRegion.parseTraceColo(trace))
+        assertEquals("US", EgressRegion.edgeLocation(trace)?.countryCode)
+        assertEquals("圣何塞", EgressRegion.edgeLocation(trace)?.detail)
+    }
+
+    @Test
     fun ignoresInvalidColoAndFallsBackToLoc() {
         val trace = "loc=CN\ncolo=ZZZ\nwarp=on"
         assertEquals("ZZZ", EgressRegion.parseTraceColo(trace))
