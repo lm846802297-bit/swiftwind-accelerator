@@ -529,8 +529,23 @@ object TunnelController {
             .build()
         val trace = runCatching {
             awaitBody(verifyClient, request)
+        }.onFailure {
+            Log.d("SwiftWindRegion", "trace request failed: ${it.javaClass.simpleName}: ${it.message}")
         }.getOrNull()
         if (!isRunning()) return@withContext null
+        Log.d(
+            "SwiftWindRegion",
+            "trace body=${trace?.take(60)?.replace('\n', '|')} running=${isRunning()}"
+        )
+        // Cloudflare 的 colo 是实际处理请求的边缘机房，比 anycast IP 的
+        // IP 库归属更可靠。能映射时直接采用，避免把 LAX 误显示成上海。
+        val edge = runCatching {
+            EgressRegion.edgeLocation(trace)
+        }.onFailure {
+            Log.d("SwiftWindRegion", "edge parse failed: ${it.javaClass.simpleName}: ${it.message}")
+        }.getOrNull()
+        Log.d("SwiftWindRegion", "edge=${edge?.countryCode}/${edge?.detail}")
+        edge?.let { return@withContext it }
         val country = EgressRegion.parseTraceLoc(trace) ?: return@withContext null
         val detail = if (country == "CN") {
             val ip = EgressRegion.parseTraceIp(trace)

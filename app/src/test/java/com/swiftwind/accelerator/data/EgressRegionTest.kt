@@ -27,6 +27,28 @@ class EgressRegionTest {
     }
 
     @Test
+    fun parsesColoAndUsesEdgeLocationBeforeIpGeolocation() {
+        val trace = """
+            fl=123f
+            ip=104.28.208.136
+            loc=CN
+            colo=LAX
+            warp=on
+        """.trimIndent()
+        assertEquals("LAX", EgressRegion.parseTraceColo(trace))
+        assertEquals("US", EgressRegion.edgeLocation(trace)?.countryCode)
+        assertEquals("洛杉矶", EgressRegion.edgeLocation(trace)?.detail)
+    }
+
+    @Test
+    fun ignoresInvalidColoAndFallsBackToLoc() {
+        val trace = "loc=CN\ncolo=ZZZ\nwarp=on"
+        assertEquals("ZZZ", EgressRegion.parseTraceColo(trace))
+        assertEquals(null, EgressRegion.edgeLocation(trace))
+        assertEquals("CN", EgressRegion.parseTraceLoc(trace))
+    }
+
+    @Test
     fun parsesEgressIpFromTrace() {
         val trace = """
             fl=123f

@@ -5,8 +5,9 @@ import java.util.Locale
 /**
  * 节点出口地区。
  *
- * WARP 入口是 Anycast，节点本身的 IP 不代表固定国家；这里只展示一次真实
- * 隧道探测中 Cloudflare trace 返回的出口国家/地区，并标明“最近检测出口”。
+ * WARP 入口是 Anycast，节点本身的 IP 不代表固定国家。Cloudflare trace 的
+ * `colo` 是实际处理请求的边缘机房（如 LAX），比 anycast IP 的 IP 库归属更可靠；
+ * 因此优先用 colo 显示节点地区，只有无法映射时才退回 `loc` / ipapi 查询。
  */
 object EgressRegion {
 
@@ -17,11 +18,30 @@ object EgressRegion {
 
     private val traceLocRegex = Regex("(?m)^loc=([A-Za-z]{2})\\s*$")
     private val traceIpRegex = Regex("(?m)^ip=(\\S+)\\s*$")
+    private val traceColoRegex = Regex("(?m)^colo=([A-Za-z]{3})\\s*$")
 
     fun parseTraceLoc(trace: String?): String? {
         if (trace.isNullOrBlank()) return null
         val code = traceLocRegex.find(trace)?.groupValues?.getOrNull(1) ?: return null
         return normalizeCode(code)
+    }
+
+    /** trace 里的 Cloudflare 边缘机房 IATA 代码，例如 LAX / HKG / NRT。 */
+    fun parseTraceColo(trace: String?): String? {
+        if (trace.isNullOrBlank()) return null
+        return traceColoRegex.find(trace)?.groupValues?.getOrNull(1)
+            ?.trim()
+            ?.uppercase()
+            ?.takeIf { it.length == 3 && it.all { ch -> ch in 'A'..'Z' } }
+    }
+
+    /**
+     * 已知 Cloudflare 边缘机房到国家/城市的映射。
+     * colo 是实际服务请求的边缘机房，不等同于出口 IP 的注册归属。
+     */
+    fun edgeLocation(trace: String?): EgressLocation? {
+        val colo = parseTraceColo(trace) ?: return null
+        return edgeLocations[colo]
     }
 
     /** trace 里的出口 IP，用于进一步查询中国的省/市。 */
@@ -253,6 +273,51 @@ object EgressRegion {
         "yinchuan" to "银川",
         "hohhot" to "呼和浩特",
         "lhasa" to "拉萨"
+    )
+
+    private val edgeLocations = mapOf(
+        "LAX" to EgressLocation("US", "洛杉矶"),
+        "SFO" to EgressLocation("US", "旧金山"),
+        "SEA" to EgressLocation("US", "西雅图"),
+        "PDX" to EgressLocation("US", "波特兰"),
+        "DEN" to EgressLocation("US", "丹佛"),
+        "DFW" to EgressLocation("US", "达拉斯"),
+        "ORD" to EgressLocation("US", "芝加哥"),
+        "ATL" to EgressLocation("US", "亚特兰大"),
+        "MIA" to EgressLocation("US", "迈阿密"),
+        "IAD" to EgressLocation("US", "华盛顿"),
+        "EWR" to EgressLocation("US", "纽瓦克"),
+        "BOS" to EgressLocation("US", "波士顿"),
+        "PHX" to EgressLocation("US", "凤凰城"),
+        "LAS" to EgressLocation("US", "拉斯维加斯"),
+        "YYZ" to EgressLocation("CA", "多伦多"),
+        "YVR" to EgressLocation("CA", "温哥华"),
+        "HKG" to EgressLocation("HK", "香港"),
+        "TPE" to EgressLocation("TW", "台北"),
+        "NRT" to EgressLocation("JP", "东京"),
+        "KIX" to EgressLocation("JP", "大阪"),
+        "ICN" to EgressLocation("KR", "首尔"),
+        "SIN" to EgressLocation("SG", "新加坡"),
+        "BKK" to EgressLocation("TH", "曼谷"),
+        "KUL" to EgressLocation("MY", "吉隆坡"),
+        "SYD" to EgressLocation("AU", "悉尼"),
+        "MEL" to EgressLocation("AU", "墨尔本"),
+        "AKL" to EgressLocation("NZ", "奥克兰"),
+        "LHR" to EgressLocation("GB", "伦敦"),
+        "MAN" to EgressLocation("GB", "曼彻斯特"),
+        "CDG" to EgressLocation("FR", "巴黎"),
+        "FRA" to EgressLocation("DE", "法兰克福"),
+        "AMS" to EgressLocation("NL", "阿姆斯特丹"),
+        "MAD" to EgressLocation("ES", "马德里"),
+        "FCO" to EgressLocation("IT", "罗马"),
+        "WAW" to EgressLocation("PL", "华沙"),
+        "IST" to EgressLocation("TR", "伊斯坦布尔"),
+        "DXB" to EgressLocation("AE", "迪拜"),
+        "BOM" to EgressLocation("IN", "孟买"),
+        "DEL" to EgressLocation("IN", "德里"),
+        "GRU" to EgressLocation("BR", "圣保罗"),
+        "EZE" to EgressLocation("AR", "布宜诺斯艾利斯"),
+        "JNB" to EgressLocation("ZA", "约翰内斯堡")
     )
 
     private val commonNames = mapOf(
