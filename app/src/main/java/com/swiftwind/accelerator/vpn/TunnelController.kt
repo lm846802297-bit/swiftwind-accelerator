@@ -523,14 +523,12 @@ object TunnelController {
     /** 通过隧道请求 Cloudflare trace，并按需补充中国的省/市。 */
     private suspend fun fetchEgressLocation(): EgressRegion.EgressLocation? = withContext(Dispatchers.IO) {
         if (!isRunning()) return@withContext null
+        val request = Request.Builder()
+            .url(VERIFY_URL)
+            .header("User-Agent", "SwiftWind/1.0")
+            .build()
         val trace = runCatching {
-            val request = Request.Builder()
-                .url(VERIFY_URL)
-                .header("User-Agent", "SwiftWind/1.0")
-                .build()
-            verifyClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) response.body?.string() else null
-            }
+            awaitBody(verifyClient, request)
         }.getOrNull()
         if (!isRunning()) return@withContext null
         val country = EgressRegion.parseTraceLoc(trace) ?: return@withContext null
@@ -545,22 +543,40 @@ object TunnelController {
     }
 
     /**
+     * 可取消的 OkHttp 请求。体检取消时 call.cancel() 会立即打断阻塞读取，
+     * 不再等慢速 trace/geo 请求自然超时。
+     */
+    private suspend fun awaitBody(client: OkHttpClient, request: Request): String? =
+        suspendCancellableCoroutine { cont ->
+            val call = client.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) cont.resume(null)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val body = runCatching {
+                        response.use { if (it.isSuccessful) it.body?.string() else null }
+                    }.getOrNull()
+                    if (cont.isActive) cont.resume(body)
+                }
+            })
+        }
+
+    /**
      * ipapi.co 的免费 HTTPS 接口。只在中国出口时调用，失败就退回国家级显示。
      * 结果按出口 IP 缓存在进程内，避免体检时重复查询同一出口。
      */
-    private fun fetchChinaRegionDetail(ip: String): String? {
+    private suspend fun fetchChinaRegionDetail(ip: String): String? {
         synchronized(regionDetailCache) {
             regionDetailCache[ip]?.let { return it }
         }
-        val body = runCatching {
-            val request = Request.Builder()
-                .url("https://ipapi.co/$ip/json/")
-                .header("User-Agent", "SwiftWind/1.0")
-                .build()
-            geoClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) response.body?.string() else null
-            }
-        }.getOrNull() ?: return null
+        val request = Request.Builder()
+            .url("https://ipapi.co/$ip/json/")
+            .header("User-Agent", "SwiftWind/1.0")
+            .build()
+        val body = runCatching { awaitBody(geoClient, request) }.getOrNull() ?: return null
         val detail = EgressRegion.parseGeoDetail(body) ?: return null
         synchronized(regionDetailCache) { regionDetailCache[ip] = detail }
         return detail
