@@ -9,7 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.swiftwind.accelerator.MainActivity
 import com.swiftwind.accelerator.R
@@ -23,10 +25,26 @@ import com.swiftwind.accelerator.R
  */
 class VpnKeepAliveService : Service() {
 
+    private val handler = Handler(Looper.getMainLooper())
+    private val syncRunnable = object : Runnable {
+        override fun run() {
+            TunnelController.syncState()
+            // 切换节点的短暂 Connecting 阶段不要撤掉保活通知；
+            // 只有明确回到 Idle / Error 才说明隧道已经结束。
+            if (TunnelController.state.value is VpnState.Idle ||
+                TunnelController.state.value is VpnState.Error
+            ) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
+            }
+            handler.postDelayed(this, 3000L)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForegroundSafely()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -39,20 +57,28 @@ class VpnKeepAliveService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForegroundSafely()
+        if (!startForegroundSafely()) {
+            // 前台服务受限时宁可退出保活，也不要让系统因未按时
+            // startForeground 把进程判为异常。
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        handler.removeCallbacks(syncRunnable)
+        handler.postDelayed(syncRunnable, 2000L)
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        handler.removeCallbacks(syncRunnable)
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 
-    private fun startForegroundSafely() {
+    private fun startForegroundSafely(): Boolean {
         val notification = buildNotification()
-        try {
+        return try {
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(
                     NOTIFICATION_ID,
@@ -62,8 +88,10 @@ class VpnKeepAliveService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
+            true
         } catch (_: Throwable) {
             // 某些系统会限制后台启动前台服务；连接本身不应因此崩溃。
+            false
         }
     }
 

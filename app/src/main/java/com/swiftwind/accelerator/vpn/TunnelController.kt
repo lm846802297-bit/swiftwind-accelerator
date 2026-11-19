@@ -165,14 +165,23 @@ object TunnelController {
             Log.d("SwiftWindSwitch", "connect done +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
         } catch (t: Throwable) {
             if (_state.value is VpnState.Error) throw t
-            // GoBackend 在切换配置失败时会尝试恢复旧隧道；如果旧隧道确实还在，
-            // 不能让 UI 停在“失败/未连接”，否则会出现界面与实际 VPN 状态相反。
+            // GoBackend 在切换配置失败时会尝试恢复旧隧道。这里不能只看“有隧道在跑”
+            // 就直接报已连接：新建的隧道也可能残留在运行但根本不通。
+            // 只有数据面验证通过，才接受这个恢复后的连接。
             val stillRunning = runCatching {
                 ::backend.isInitialized && backend.getRunningTunnelNames().contains(TUNNEL_NAME)
             }.getOrDefault(false)
             if (stillRunning) {
-                if (startedAt == 0L) startedAt = SystemClock.elapsedRealtime()
-                updateState(VpnState.Connected)
+                val dataOk = verifyTraffic()
+                Log.d("SwiftWindSwitch", "connect catch stillRunning dataOk=$dataOk")
+                if (dataOk) {
+                    if (startedAt == 0L) startedAt = SystemClock.elapsedRealtime()
+                    updateState(VpnState.Connected)
+                } else {
+                    runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                    runCatching { awaitRunning(false, 800L) }
+                    updateState(VpnState.Error(mapError(t)))
+                }
             } else {
                 updateState(VpnState.Error(mapError(t)))
             }

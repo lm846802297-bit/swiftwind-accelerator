@@ -92,8 +92,12 @@ fun NodesScreen(
     var pendingDelete by remember { mutableStateOf<Node?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val probeProgress = ui.probeProgress
-    val lastChecked = ui.healthCheckedAt.values.maxOrNull()
-    val staleCount = ui.healthCheckedAt.values.count { now - it > HEALTH_TTL_MS }
+    // 只统计当前列表里的节点，删除节点后不要留下已不存在节点的过期标签。
+    val lastChecked = ui.nodes.mapNotNull { ui.healthCheckedAt[it.id] }.maxOrNull()
+    val staleCount = ui.nodes.count { node ->
+        val checkedAt = ui.healthCheckedAt[node.id] ?: return@count false
+        now - checkedAt > HEALTH_TTL_MS
+    }
     LaunchedEffect(Unit) {
         while (true) {
             delay(30_000L)

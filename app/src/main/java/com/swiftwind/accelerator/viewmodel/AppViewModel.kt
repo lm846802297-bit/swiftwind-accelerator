@@ -83,6 +83,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val underlyingNetworks = LinkedHashSet<Network>()
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var networkMonitorReady = false
+    // 只有真正经历过底层网络丢失后，才允许后续新增网络触发自动重连。
+    // 否则 App 启动后系统补发初始网络回调时，会在已连接状态下误触发一次重连。
+    private var networkReconnectArmed = false
     private var networkReconnectJob: Job? = null
 
     init {
@@ -402,13 +405,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         val node = _ui.value.nodes.firstOrNull { it.id == id } ?: return
         if (_ui.value.selectedId == id) return
+        // 网络恢复任务可能已经进入 TunnelController.connect；此时取消 Job 会
+        // 让底层连接中途被打断，状态停在 Connecting。等它结束再切换。
+        if (networkReconnectJob?.isActive == true) {
+            notify("正在恢复网络连接，请稍后再切换节点")
+            return
+        }
+        // 先检查隧道状态再取消网络恢复任务：如果恢复已经进入 Connecting，
+        // 直接取消 Job 可能把状态留在 Connecting，后续点击都会被拒。
+        val currentState = TunnelController.state.value
+        if (currentState is VpnState.Connecting || currentState is VpnState.Disconnecting) {
+            notify("正在切换连接，请稍后再切换节点")
+            return
+        }
         networkReconnectJob?.cancel()
         networkReconnectJob = null
-        when (TunnelController.state.value) {
-            is VpnState.Connecting, is VpnState.Disconnecting -> {
-                notify("正在切换连接，请稍后再切换节点")
-                return
-            }
+        when (currentState) {
             is VpnState.Connected -> {
                 // 已连接时先真正切换隧道，成功后再落选中项，避免 UI 与隧道不一致。
                 _ui.update { it.copy(busy = true) }
@@ -487,6 +499,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (_ui.value.nodes.none { it.id == id }) return
+        if (networkReconnectJob?.isActive == true) {
+            notify("正在恢复网络连接，请稍后再删除节点")
+            return
+        }
         when (TunnelController.state.value) {
             is VpnState.Connecting, is VpnState.Disconnecting -> {
                 notify("正在切换连接，请稍后再删除节点")
@@ -510,7 +526,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 NodeStore.saveNodes(remaining)
                 val newSelected = if (wasSelected) remaining.firstOrNull()?.id else _ui.value.selectedId
                 NodeStore.selectedId = newSelected
-                _ui.update { it.copy(nodes = remaining, selectedId = newSelected) }
+                _ui.update {
+                    it.copy(
+                        nodes = remaining,
+                        selectedId = newSelected,
+                        health = it.health - id,
+                        healthCheckedAt = it.healthCheckedAt - id,
+                        quality = it.quality - id
+                    )
+                }
                 notify("节点已删除")
             } finally {
                 _ui.update { it.copy(busy = false) }
@@ -537,8 +561,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             else -> Unit
         }
         if (connectJob?.isActive == true) return
+        if (networkReconnectJob?.isActive == true) {
+            notify("正在恢复网络连接，请稍后再试")
+            return
+        }
         networkReconnectJob?.cancel()
         networkReconnectJob = null
+        // 在启动协程前同步占位，避免“点连接后立刻切换节点/删除节点”抢在
+        // TunnelController 进入 Connecting 之前改掉选中项或节点列表。
+        _ui.update { it.copy(busy = true) }
         val job = viewModelScope.launch {
             try {
                 val result = connectWithFailover(node, allowWarpFailover = true)
@@ -549,6 +580,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 if (connectJob === coroutineContext[Job]) connectJob = null
+                _ui.update { it.copy(busy = false) }
             }
         }
         connectJob = job
@@ -645,13 +677,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
                 if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
                 val added = synchronized(underlyingNetworks) { underlyingNetworks.add(network) }
-                if (added && networkMonitorReady) scheduleNetworkReconnect()
+                if (added && networkMonitorReady && networkReconnectArmed) {
+                    scheduleNetworkReconnect()
+                }
             }
 
             override fun onLost(network: Network) {
                 val removed = synchronized(underlyingNetworks) { underlyingNetworks.remove(network) }
+                if (!removed) return
+                // 记录“网络确实断过一次”，之后新网络出现时才执行重连。
+                networkReconnectArmed = true
                 val hasNetwork = synchronized(underlyingNetworks) { underlyingNetworks.isNotEmpty() }
-                if (removed && hasNetwork && networkMonitorReady) scheduleNetworkReconnect()
+                if (hasNetwork && networkMonitorReady) scheduleNetworkReconnect()
             }
         }
         runCatching {
@@ -661,6 +698,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             delay(2000L)
             networkMonitorReady = true
+            // 极少数设备在启动后 2 秒内就完成一次网络切换；补一次补发检查。
+            if (networkReconnectArmed &&
+                TunnelController.state.value is VpnState.Connected &&
+                synchronized(underlyingNetworks) { underlyingNetworks.isNotEmpty() }
+            ) {
+                scheduleNetworkReconnect()
+            }
         }
     }
 
@@ -702,6 +746,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        if (networkReconnectJob?.isActive == true) {
+            notify("正在恢复网络连接，请稍后再断开")
+            return
+        }
         networkReconnectJob?.cancel()
         networkReconnectJob = null
         viewModelScope.launch {
