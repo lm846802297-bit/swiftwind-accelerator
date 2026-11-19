@@ -51,9 +51,11 @@ class VpnKeepAliveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // 进程被系统重启后，先确认系统里是否仍有本 App 的隧道。
-        // 没有隧道时立即退出，避免留下一个“假连接”通知。
+        // 这里必须允许接管运行中的隧道；否则 Service 会看到 Controller 的
+        // 初始 Idle 状态并直接退出，隧道还在、前台保活却已经消失。
+        // 没有隧道时 syncState 仍会保持 Idle，随后立即退出，不会留下假通知。
         TunnelController.init(this)
-        TunnelController.syncState()
+        TunnelController.syncState(adoptRunningTunnel = true)
         if (TunnelController.state.value !is VpnState.Connected) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()

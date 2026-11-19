@@ -61,6 +61,7 @@ import com.swiftwind.accelerator.ui.theme.TextSecondary
 import com.swiftwind.accelerator.util.formatBytes
 import com.swiftwind.accelerator.util.formatDuration
 import com.swiftwind.accelerator.viewmodel.UiState
+import com.swiftwind.accelerator.vpn.NODE_HEALTH_TTL_MS
 import com.swiftwind.accelerator.vpn.VpnState
 
 @Composable
@@ -78,7 +79,11 @@ fun HomeScreen(
         Spacer(Modifier.height(10.dp))
         Header(state = ui.vpnState, online = ui.networkAvailable, reconnecting = ui.reconnecting)
         Spacer(Modifier.height(18.dp))
-        NodeSelector(node = ui.selectedNode, onClick = onOpenNodes)
+        NodeSelector(
+            node = ui.selectedNode,
+            healthCheckedAt = ui.selectedNode?.let { ui.healthCheckedAt[it.id] },
+            onClick = onOpenNodes
+        )
         Spacer(Modifier.weight(0.9f))
         ConnectOrb(
             state = ui.vpnState,
@@ -111,11 +116,13 @@ fun HomeScreen(
         Spacer(Modifier.height(14.dp))
         Text(
             "免费节点由 Cloudflare WARP 提供 · WireGuard 加密",
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
             color = TextSecondary.copy(alpha = 0.65f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -193,7 +200,7 @@ private fun StatusPill(state: VpnState, online: Boolean, reconnecting: Boolean) 
 }
 
 @Composable
-private fun NodeSelector(node: Node?, onClick: () -> Unit) {
+private fun NodeSelector(node: Node?, healthCheckedAt: Long?, onClick: () -> Unit) {
     GlassCard(modifier = Modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -214,9 +221,15 @@ private fun NodeSelector(node: Node?, onClick: () -> Unit) {
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val regionFresh = healthCheckedAt != null &&
+                        System.currentTimeMillis() - healthCheckedAt <= NODE_HEALTH_TTL_MS
                     Text(
-                        // 首页只展示最近一次检测结果；WARP 的出口可能随 Anycast 调度变化。
-                        EgressRegion.summary(node, regionFresh = true, hasCheckedAt = true),
+                        // 首页与节点列表保持同一口径：体检结果过期后不再把旧地区当成当前出口。
+                        EgressRegion.summary(
+                            node,
+                            regionFresh = regionFresh,
+                            hasCheckedAt = healthCheckedAt != null
+                        ),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
                         color = TextSecondary.copy(alpha = 0.6f),
                         maxLines = 1,
