@@ -98,7 +98,7 @@ fun SettingsScreen(
                 SettingRow(
                     icon = Icons.AutoMirrored.Rounded.OpenInNew,
                     title = "系统 VPN 设置",
-                    subtitle = "可在系统中开启「始终开启 VPN」",
+                    subtitle = "可设置始终开启 VPN",
                     onClick = onOpenVpnSettings,
                     showArrow = true
                 )
