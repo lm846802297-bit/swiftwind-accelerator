@@ -93,6 +93,21 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+
+        // 权限弹窗期间 Activity 被重建、旧 Result 回调丢失时，若权限其实已经授予，
+        // 在首帧后补一次连接，避免点过“连接”却停在未连接状态。
+        if (pendingConnectAfterNotification && hasNotificationPermission()) {
+            pendingConnectAfterNotification = false
+            window.decorView.post {
+                if (!isFinishing && !isDestroyed) requestVpnAndConnect()
+            }
+        }
+        if (pendingProbe && VpnService.prepare(this) == null) {
+            pendingProbe = false
+            window.decorView.post {
+                if (!isFinishing && !isDestroyed) viewModel.probeNodes()
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -115,11 +130,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun ensureNotificationPermission(then: () -> Unit) {
-        if (Build.VERSION.SDK_INT < 33 ||
+    private fun hasNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT < 33 ||
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
-        ) {
+
+    private fun ensureNotificationPermission(then: () -> Unit) {
+        if (hasNotificationPermission()) {
             then()
             return
         }

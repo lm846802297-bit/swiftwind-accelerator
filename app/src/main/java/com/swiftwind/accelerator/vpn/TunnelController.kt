@@ -108,6 +108,14 @@ object TunnelController {
         }
     }
 
+    /** App 进程仍存活时，若系统把前台保活服务回收了，补拉起一次。 */
+    fun ensureKeepAlive() {
+        if (!::appContext.isInitialized) return
+        if (_state.value !is VpnState.Connected) return
+        if (VpnKeepAliveService.isRunning()) return
+        runCatching { VpnKeepAliveService.start(appContext) }
+    }
+
     suspend fun connect(
         configText: String,
         verifyData: Boolean = true,

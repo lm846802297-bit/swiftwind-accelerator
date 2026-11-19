@@ -56,6 +56,12 @@ data class UiState(
     val health: Map<String, NodeHealth> = emptyMap(),
     val healthCheckedAt: Map<String, Long> = emptyMap(),
     val quality: Map<String, NodeQuality> = emptyMap(),
+    // 底层 Wi-Fi / 蜂窝网络是否仍有 Internet。VPN 隧道本身可以保持 UP，
+    // 但没有底层网络时不能继续宣称“已连接 / 流量已受保护”。
+    val networkAvailable: Boolean = true,
+    // 网络恢复后正在重建隧道。此时底层网络已回来，但 WireGuard 握手
+    // 还没完成，不能提前显示“已连接”。
+    val reconnecting: Boolean = false,
     val probeProgress: ProbeProgress? = null
 ) {
     val selectedNode: Node?
@@ -103,7 +109,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _ui.value = UiState(
             nodes = nodes,
             selectedId = selected,
-            vpnState = TunnelController.state.value
+            vpnState = TunnelController.state.value,
+            networkAvailable = hasUnderlyingInternet()
         )
 
         viewModelScope.launch {
@@ -376,6 +383,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 }
+                if (nodes.isEmpty()) {
+                    notify("没有识别到有效的 WireGuard 配置")
+                    return@launch
+                }
                 val added = addNodes(nodes, selectFirst = _ui.value.selectedId == null)
                 val suffix = if (invalid > 0) "，${invalid} 个配置无法解析" else ""
                 notify("已导入 ${added} 个节点$suffix")
@@ -410,6 +421,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         endpoint = ConfigImporter.endpointOf(text),
                         source = NodeSource.SUBSCRIPTION
                     )
+                }
+                if (nodes.isEmpty()) {
+                    notify("订阅里没有可用的 WireGuard 配置")
+                    return@launch
                 }
                 val added = addNodes(nodes, selectFirst = _ui.value.selectedId == null)
                 notify("订阅已更新，新增 ${added} 个节点")
@@ -540,7 +555,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (wasSelected) lastUserConnectionActionAt = SystemClock.elapsedRealtime()
         viewModelScope.launch {
             try {
-                if (wasSelected && TunnelController.state.value is VpnState.Connected) {
+                if (wasSelected &&
+                    (TunnelController.state.value is VpnState.Connected ||
+                        TunnelController.state.value is VpnState.Error)
+                ) {
                     try {
                         TunnelController.disconnect()
                     } catch (t: Throwable) {
@@ -593,6 +611,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         networkReconnectJob?.cancel()
         networkReconnectJob = null
+        networkReconnectArmed = false
         lastUserConnectionActionAt = SystemClock.elapsedRealtime()
         // 在启动协程前同步占位，避免“点连接后立刻切换节点/删除节点”抢在
         // TunnelController 进入 Connecting 之前改掉选中项或节点列表。
@@ -693,32 +712,82 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return null
     }
 
+    @Suppress("DEPRECATION")
+    private fun hasUnderlyingInternet(): Boolean {
+        val manager = connectivityManager ?: return false
+        return runCatching {
+            manager.allNetworks.any { network ->
+                val caps = manager.getNetworkCapabilities(network)
+                caps != null &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            }
+        }.getOrDefault(false)
+    }
+
     private fun startNetworkMonitoring() {
         val manager = connectivityManager ?: return
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
-                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
-                val added = synchronized(underlyingNetworks) { underlyingNetworks.add(network) }
-                if (added) {
-                    networkChangeEventAt = SystemClock.elapsedRealtime()
+            // ConnectivityManager 的回调线程不是主线程；统一投回 viewModelScope（Main），
+            // 避免 networkReconnectArmed / networkReconnectJob / 时间戳跨线程读写。
+            override fun onAvailable(network: Network) {
+                viewModelScope.launch {
+                    val caps = manager.getNetworkCapabilities(network)
+                    if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) return@launch
+                    val added = synchronized(underlyingNetworks) { underlyingNetworks.add(network) }
+                    if (added) {
+                        networkChangeEventAt = SystemClock.elapsedRealtime()
+                        _ui.update { it.copy(networkAvailable = true) }
+                    }
+                    if (added && networkMonitorReady && networkReconnectArmed) {
+                        scheduleNetworkReconnect()
+                    }
                 }
-                if (added && networkMonitorReady && networkReconnectArmed) {
-                    scheduleNetworkReconnect()
+            }
+
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                viewModelScope.launch {
+                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@launch
+                    if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                        // 网络没有真正 Internet 能力时，不能继续把它留在“可用底层网络”集合里，
+                        // 否则后续 isNotEmpty() 判断会把一次断网误当成仍可重连。
+                        val removed = synchronized(underlyingNetworks) { underlyingNetworks.remove(network) }
+                        if (removed) {
+                            networkChangeEventAt = SystemClock.elapsedRealtime()
+                            networkReconnectArmed = true
+                            val hasNetwork = synchronized(underlyingNetworks) {
+                                underlyingNetworks.isNotEmpty()
+                            }
+                            _ui.update { it.copy(networkAvailable = hasNetwork) }
+                            if (hasNetwork && networkMonitorReady) scheduleNetworkReconnect()
+                        }
+                        return@launch
+                    }
+                    val added = synchronized(underlyingNetworks) { underlyingNetworks.add(network) }
+                    if (added) {
+                        networkChangeEventAt = SystemClock.elapsedRealtime()
+                        _ui.update { it.copy(networkAvailable = true) }
+                    }
+                    if (added && networkMonitorReady && networkReconnectArmed) {
+                        scheduleNetworkReconnect()
+                    }
                 }
             }
 
             override fun onLost(network: Network) {
-                val removed = synchronized(underlyingNetworks) { underlyingNetworks.remove(network) }
-                if (!removed) return
-                networkChangeEventAt = SystemClock.elapsedRealtime()
-                // 记录“网络确实断过一次”，之后新网络出现时才执行重连。
-                networkReconnectArmed = true
-                val hasNetwork = synchronized(underlyingNetworks) { underlyingNetworks.isNotEmpty() }
-                if (hasNetwork && networkMonitorReady) scheduleNetworkReconnect()
+                viewModelScope.launch {
+                    val removed = synchronized(underlyingNetworks) { underlyingNetworks.remove(network) }
+                    if (!removed) return@launch
+                    networkChangeEventAt = SystemClock.elapsedRealtime()
+                    // 记录“网络确实断过一次”，之后新网络出现时才执行重连。
+                    networkReconnectArmed = true
+                    val hasNetwork = synchronized(underlyingNetworks) { underlyingNetworks.isNotEmpty() }
+                    _ui.update { it.copy(networkAvailable = hasNetwork) }
+                    if (hasNetwork && networkMonitorReady) scheduleNetworkReconnect()
+                }
             }
         }
         runCatching {
@@ -739,31 +808,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun scheduleNetworkReconnect() {
-        viewModelScope.launch {
-            if (!networkMonitorReady) return@launch
-            if (TunnelController.state.value !is VpnState.Connected) return@launch
-            if (synchronized(underlyingNetworks) { underlyingNetworks.isEmpty() }) return@launch
-            val node = _ui.value.selectedNode ?: return@launch
-            if (networkReconnectJob?.isActive == true) return@launch
-            networkReconnectJob = launch reconnect@{
-                val eventAt = networkChangeEventAt
-                try {
-                    // 网络切换后系统 VPN 的底层 socket 需要一点时间稳定，避免刚切就握手。
-                    delay(1200L)
-                    if (lastUserConnectionActionAt > eventAt) return@reconnect
-                    if (TunnelController.state.value !is VpnState.Connected) return@reconnect
-                    notify("网络已切换，正在重连…")
-                    val result = connectWithFailover(node, allowWarpFailover = true)
-                    if (result.isFailure) {
-                        val error = result.exceptionOrNull()
-                            ?: IllegalStateException("网络切换后重连失败")
-                        notify("网络切换后重连失败：${TunnelController.mapError(error)}")
-                    } else {
-                        notify("网络切换后已恢复连接")
-                    }
-                } finally {
-                    networkReconnectJob = null
+        if (!networkMonitorReady) return
+        if (TunnelController.state.value !is VpnState.Connected) return
+        if (synchronized(underlyingNetworks) { underlyingNetworks.isEmpty() }) return
+        val node = _ui.value.selectedNode ?: return
+        if (networkReconnectJob?.isActive == true) return
+        // 在启动协程前先同步占位，避免 onCapabilitiesChanged / onLost
+        // 连续回调同时通过 isActive 检查，启动两条互相覆盖的重连协程。
+        // 网络丢失事件只消费一次；重连失败后由用户手动处理，不再持续自旋。
+        networkReconnectArmed = false
+        networkReconnectJob = viewModelScope.launch reconnect@{
+            val eventAt = networkChangeEventAt
+            _ui.update { it.copy(reconnecting = true) }
+            try {
+                // 网络切换后系统 VPN 的底层 socket 需要一点时间稳定，避免刚切就握手。
+                delay(1200L)
+                if (lastUserConnectionActionAt > eventAt) return@reconnect
+                if (TunnelController.state.value !is VpnState.Connected) return@reconnect
+                notify("网络已切换，正在重连…")
+                val result = connectWithFailover(node, allowWarpFailover = true)
+                if (result.isFailure) {
+                    val error = result.exceptionOrNull()
+                        ?: IllegalStateException("网络切换后重连失败")
+                    notify("网络切换后重连失败：${TunnelController.mapError(error)}")
+                } else {
+                    notify("网络切换后已恢复连接")
                 }
+            } finally {
+                _ui.update { it.copy(reconnecting = false) }
+                networkReconnectJob = null
             }
         }
     }
@@ -789,6 +862,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         networkReconnectJob?.cancel()
         networkReconnectJob = null
+        networkReconnectArmed = false
         lastUserConnectionActionAt = SystemClock.elapsedRealtime()
         // 先同步占用 busy，避免“点断开后立刻再点连接 / 切节点”在
         // TunnelController 真正进入 Disconnecting 之前抢状态。
@@ -826,9 +900,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun startStatsPolling() {
         if (statsJob?.isActive == true) return
         statsJob = viewModelScope.launch {
+            var tick = 0
             while (isActive) {
                 TunnelController.syncState()
+                // 系统回收前台服务时，TunnelController 的状态可能仍是 Connected；
+                // 每 15 秒补一次心跳检查，服务不在就重新拉起。
+                if (tick > 0 && tick % 15 == 0) TunnelController.ensureKeepAlive()
                 _ui.update { it.copy(stats = TunnelController.snapshot()) }
+                tick++
                 delay(1000)
             }
         }

@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,9 +33,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -74,7 +75,7 @@ fun HomeScreen(
             .padding(horizontal = 22.dp)
     ) {
         Spacer(Modifier.height(10.dp))
-        Header(state = ui.vpnState)
+        Header(state = ui.vpnState, online = ui.networkAvailable, reconnecting = ui.reconnecting)
         Spacer(Modifier.height(18.dp))
         NodeSelector(node = ui.selectedNode, onClick = onOpenNodes)
         Spacer(Modifier.weight(0.9f))
@@ -87,18 +88,20 @@ fun HomeScreen(
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            text = statusTitle(ui.vpnState),
+            text = statusTitle(ui.vpnState, ui.networkAvailable, ui.reconnecting),
             style = MaterialTheme.typography.headlineMedium,
-            color = when (ui.vpnState) {
-                is VpnState.Connected -> Mint
-                is VpnState.Error -> Danger
+            color = when {
+                ui.vpnState is VpnState.Connected && !ui.networkAvailable -> Rose
+                ui.vpnState is VpnState.Connected && ui.reconnecting -> Sky
+                ui.vpnState is VpnState.Connected -> Mint
+                ui.vpnState is VpnState.Error -> Danger
                 else -> TextPrimary
             },
             fontWeight = FontWeight.SemiBold
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = statusSubtitle(ui.vpnState),
+            text = statusSubtitle(ui.vpnState, ui.networkAvailable, ui.reconnecting),
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
@@ -116,7 +119,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun Header(state: VpnState) {
+private fun Header(state: VpnState, online: Boolean, reconnecting: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
@@ -139,17 +142,21 @@ private fun Header(state: VpnState) {
                 color = Rose.copy(alpha = 0.85f)
             )
         }
-        StatusPill(state)
+        StatusPill(state, online, reconnecting)
     }
 }
 
 @Composable
-private fun StatusPill(state: VpnState) {
+private fun StatusPill(state: VpnState, online: Boolean, reconnecting: Boolean) {
     val connected = state is VpnState.Connected
-    val dotColor = when (state) {
-        is VpnState.Connected -> Mint
-        is VpnState.Connecting, is VpnState.Disconnecting -> Sky
-        is VpnState.Error -> Danger
+    val offline = connected && !online
+    val rebooting = connected && online && reconnecting
+    val dotColor = when {
+        offline -> Rose
+        rebooting -> Sky
+        connected -> Mint
+        state is VpnState.Connecting || state is VpnState.Disconnecting -> Sky
+        state is VpnState.Error -> Danger
         else -> TextSecondary
     }
     Row(
@@ -161,15 +168,22 @@ private fun StatusPill(state: VpnState) {
     ) {
         Box(Modifier.size(6.dp).clip(CircleShape).background(dotColor))
         Text(
-            when (state) {
-                is VpnState.Connected -> "已连接"
-                is VpnState.Connecting -> "连接中"
-                is VpnState.Disconnecting -> "断开中"
-                is VpnState.Error -> "异常"
+            when {
+                offline -> "等待网络"
+                rebooting -> "重连中"
+                state is VpnState.Connected -> "已连接"
+                state is VpnState.Connecting -> "连接中"
+                state is VpnState.Disconnecting -> "断开中"
+                state is VpnState.Error -> "异常"
                 else -> "未连接"
             },
             style = MaterialTheme.typography.labelLarge,
-            color = if (connected) Mint else TextSecondary,
+            color = when {
+                offline -> Rose
+                rebooting -> Sky
+                connected -> Mint
+                else -> TextSecondary
+            },
             modifier = Modifier.padding(start = 6.dp)
         )
     }
@@ -208,6 +222,7 @@ private fun NodeSelector(node: Node?, onClick: () -> Unit) {
 @Composable
 private fun ConnectOrb(state: VpnState, enabled: Boolean, onClick: () -> Unit) {
     val active = state is VpnState.Connected || state is VpnState.Connecting
+    val interactionSource = remember { MutableInteractionSource() }
     val transition = rememberInfiniteTransition(label = "orb-pulse")
     val pulse by transition.animateFloat(
         initialValue = 0f,
@@ -256,10 +271,23 @@ private fun ConnectOrb(state: VpnState, enabled: Boolean, onClick: () -> Unit) {
                         Brush.linearGradient(listOf(Color(0xFF2C1832), Color(0xFF160C1D)))
                     }
                 )
-                .alpha(if (enabled) 1f else 0.55f)
-                .clickable(enabled = enabled, onClick = onClick),
+                .clickable(
+                    interactionSource = interactionSource,
+                    // 连接瞬间按钮会被 busy 临时禁用，默认涟漪可能停留在按下态，
+                    // 让已连接的粉色主按钮看起来像一块黑圆。这里只保留点击行为。
+                    indication = null,
+                    enabled = enabled,
+                    onClick = onClick
+                ),
             contentAlignment = Alignment.Center
         ) {
+            if (!enabled) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color(0x33000000))
+                )
+            }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(
                     Icons.Rounded.PowerSettingsNew,
@@ -311,18 +339,22 @@ private fun Divider() {
     Box(Modifier.width(1.dp).height(28.dp).background(Stroke))
 }
 
-private fun statusTitle(state: VpnState): String = when (state) {
-    is VpnState.Connected -> "已连接"
-    is VpnState.Connecting -> "正在连接"
-    is VpnState.Disconnecting -> "正在断开"
-    is VpnState.Error -> "连接失败"
+private fun statusTitle(state: VpnState, online: Boolean, reconnecting: Boolean): String = when {
+    state is VpnState.Connected && !online -> "网络已断开"
+    state is VpnState.Connected && reconnecting -> "正在恢复网络"
+    state is VpnState.Connected -> "已连接"
+    state is VpnState.Connecting -> "正在连接"
+    state is VpnState.Disconnecting -> "正在断开"
+    state is VpnState.Error -> "连接失败"
     else -> "未连接"
 }
 
-private fun statusSubtitle(state: VpnState): String = when (state) {
-    is VpnState.Connected -> "加密隧道运行中，流量已受保护"
-    is VpnState.Connecting -> "正在建立安全的 WireGuard 隧道…"
-    is VpnState.Disconnecting -> "正在关闭隧道…"
-    is VpnState.Error -> state.message
+private fun statusSubtitle(state: VpnState, online: Boolean, reconnecting: Boolean): String = when {
+    state is VpnState.Connected && !online -> "VPN 隧道保持待命，网络恢复后会自动重连"
+    state is VpnState.Connected && reconnecting -> "底层网络已切换，正在重新建立安全隧道…"
+    state is VpnState.Connected -> "加密隧道运行中，流量已受保护"
+    state is VpnState.Connecting -> "正在建立安全的 WireGuard 隧道…"
+    state is VpnState.Disconnecting -> "正在关闭隧道…"
+    state is VpnState.Error -> state.message
     else -> "点击上方按钮，开启安全加速"
 }

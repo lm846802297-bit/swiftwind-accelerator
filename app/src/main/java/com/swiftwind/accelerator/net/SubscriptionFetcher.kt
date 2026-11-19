@@ -13,6 +13,14 @@ class SubscriptionFetcher(
         .readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
+        // 应用层拦截器看不到重定向后的请求；网络拦截器会在每个实际请求前执行，
+        // 因此 HTTPS 跳 HTTP 时能在发出明文请求前直接失败。
+        .addNetworkInterceptor { chain ->
+            if (!chain.request().url.scheme.equals("https", ignoreCase = true)) {
+                throw IOException("订阅链接被重定向到非 HTTPS 地址")
+            }
+            chain.proceed(chain.request())
+        }
         .build()
 ) {
     fun fetch(url: String): String {
@@ -31,10 +39,6 @@ class SubscriptionFetcher(
 
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("订阅拉取失败：HTTP ${response.code}")
-            // 重定向必须仍停留在 HTTPS，避免从安全链接跳回明文。
-            if (!response.request.url.scheme.equals("https", ignoreCase = true)) {
-                throw IOException("订阅链接被重定向到非 HTTPS 地址")
-            }
             val body = response.body ?: throw IOException("订阅内容为空")
             if (body.contentLength() > MAX_BYTES) throw IOException("订阅内容过大")
 
@@ -44,7 +48,7 @@ class SubscriptionFetcher(
                 val buffer = ByteArray(8192)
                 while (true) {
                     val read = input.read(buffer)
-                    if (read < 0) break
+                    if (read <= 0) break
                     if (output.size().toLong() + read > MAX_BYTES) {
                         throw IOException("订阅内容过大")
                     }

@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.swiftwind.accelerator.MainActivity
 import com.swiftwind.accelerator.R
@@ -28,6 +29,7 @@ class VpnKeepAliveService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private val syncRunnable = object : Runnable {
         override fun run() {
+            lastHeartbeatAt = SystemClock.elapsedRealtime()
             TunnelController.syncState()
             // 切换节点的短暂 Connecting 阶段不要撤掉保活通知；
             // 只有明确回到 Idle / Error 才说明隧道已经结束。
@@ -64,6 +66,7 @@ class VpnKeepAliveService : Service() {
             return START_NOT_STICKY
         }
         handler.removeCallbacks(syncRunnable)
+        lastHeartbeatAt = SystemClock.elapsedRealtime()
         handler.postDelayed(syncRunnable, 2000L)
         return START_STICKY
     }
@@ -71,6 +74,7 @@ class VpnKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        lastHeartbeatAt = 0L
         handler.removeCallbacks(syncRunnable)
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
@@ -131,6 +135,16 @@ class VpnKeepAliveService : Service() {
     companion object {
         private const val CHANNEL_ID = "vpn_keepalive"
         private const val NOTIFICATION_ID = 1001
+
+        // 服务每 3 秒至少刷新一次；超过 12 秒没有心跳就认为它已经被系统回收。
+        @Volatile
+        private var lastHeartbeatAt = 0L
+
+        fun isRunning(): Boolean {
+            val heartbeat = lastHeartbeatAt
+            return heartbeat > 0L &&
+                SystemClock.elapsedRealtime() - heartbeat < 12_000L
+        }
 
         fun start(context: Context) {
             val intent = Intent(context, VpnKeepAliveService::class.java)
