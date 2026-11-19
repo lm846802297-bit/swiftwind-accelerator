@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.Icon
@@ -47,7 +48,9 @@ import com.swiftwind.accelerator.viewmodel.UiState
 @Composable
 fun SettingsScreen(
     ui: UiState,
+    notificationsEnabled: Boolean,
     onOpenVpnSettings: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
     onOpenPrivacy: () -> Unit
 ) {
     Column(
@@ -81,6 +84,15 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Shield,
                     title = "VPN 协议",
                     value = "WireGuard"
+                )
+                RowDivider()
+                SettingRow(
+                    icon = Icons.Rounded.Notifications,
+                    title = "通知权限",
+                    subtitle = "前台保活通知",
+                    value = if (notificationsEnabled) "已开启" else "未开启",
+                    onClick = onOpenNotificationSettings,
+                    showArrow = true
                 )
                 RowDivider()
                 SettingRow(

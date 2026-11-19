@@ -15,6 +15,8 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.core.view.WindowCompat
 import com.swiftwind.accelerator.ui.SwiftWindApp
@@ -26,6 +28,7 @@ import com.swiftwind.accelerator.vpn.VpnState
 class MainActivity : ComponentActivity() {
 
     private val viewModel: AppViewModel by viewModels()
+    private var notificationsEnabled by mutableStateOf(false)
     private lateinit var vpnPermissionLauncher: ActivityResultLauncher<Intent>
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private var afterNotificationPermission: (() -> Unit)? = null
@@ -38,6 +41,7 @@ class MainActivity : ComponentActivity() {
         pendingConnectAfterNotification =
             savedInstanceState?.getBoolean(KEY_PENDING_CONNECT_AFTER_NOTIFICATION) ?: false
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        notificationsEnabled = hasNotificationPermission()
 
         vpnPermissionLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
@@ -58,6 +62,7 @@ class MainActivity : ComponentActivity() {
         notificationPermissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
+            notificationsEnabled = granted
             // 即使拒绝通知权限，也不阻断连接；只是前台服务的通知不会展示。
             if (!granted) {
                 Toast.makeText(
@@ -85,9 +90,11 @@ class MainActivity : ComponentActivity() {
                 SwiftWindApp(
                     ui = ui,
                     viewModel = viewModel,
+                    notificationsEnabled = notificationsEnabled,
                     onToggleConnection = ::toggleConnection,
                     onProbeNodes = ::probeNodes,
                     onOpenVpnSettings = ::openVpnSettings,
+                    onOpenNotificationSettings = ::openNotificationSettings,
                     onOpenPrivacy = ::openPrivacy
                 )
             }
@@ -107,6 +114,12 @@ class MainActivity : ComponentActivity() {
                 if (!isFinishing && !isDestroyed) viewModel.probeNodes()
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 从系统通知设置返回后刷新状态，避免设置页仍显示旧值。
+        notificationsEnabled = hasNotificationPermission()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -177,6 +190,26 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
         }.onFailure {
             Toast.makeText(this, "无法打开系统 VPN 设置", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openNotificationSettings() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                )
+            } else {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+        }.onFailure {
+            Toast.makeText(this, "无法打开通知设置", Toast.LENGTH_SHORT).show()
         }
     }
 

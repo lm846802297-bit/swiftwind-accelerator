@@ -37,9 +37,11 @@ import com.swiftwind.accelerator.viewmodel.UiState
 fun SwiftWindApp(
     ui: UiState,
     viewModel: AppViewModel,
+    notificationsEnabled: Boolean,
     onToggleConnection: () -> Unit,
     onProbeNodes: () -> Unit,
     onOpenVpnSettings: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
     onOpenPrivacy: () -> Unit
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -83,7 +85,9 @@ fun SwiftWindApp(
                         )
                         else -> SettingsScreen(
                             ui = ui,
+                            notificationsEnabled = notificationsEnabled,
                             onOpenVpnSettings = onOpenVpnSettings,
+                            onOpenNotificationSettings = onOpenNotificationSettings,
                             onOpenPrivacy = onOpenPrivacy
                         )
                     }
