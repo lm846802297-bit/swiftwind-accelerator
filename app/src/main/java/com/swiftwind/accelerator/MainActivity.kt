@@ -191,6 +191,6 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val KEY_PENDING_PROBE = "pending_probe"
         const val KEY_PENDING_CONNECT_AFTER_NOTIFICATION = "pending_connect_after_notification"
-        const val PRIVACY_URL = "https://aka.doubaocdn.com/s/9EX5YNoJts"
+        const val PRIVACY_URL = "https://aka.doubaocdn.com/s/qq9q2SBHKb"
     }
 }
