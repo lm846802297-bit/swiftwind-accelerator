@@ -3,6 +3,7 @@ package com.swiftwind.accelerator
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -54,8 +55,15 @@ class MainActivity : ComponentActivity() {
 
         notificationPermissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission()
-        ) {
+        ) { granted ->
             // 即使拒绝通知权限，也不阻断连接；只是前台服务的通知不会展示。
+            if (!granted) {
+                Toast.makeText(
+                    this,
+                    "通知权限未开启：后台保活通知不会显示，可在系统设置中开启",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
             afterNotificationPermission?.invoke()
             afterNotificationPermission = null
         }
@@ -68,7 +76,8 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel,
                     onToggleConnection = ::toggleConnection,
                     onProbeNodes = ::probeNodes,
-                    onOpenVpnSettings = ::openVpnSettings
+                    onOpenVpnSettings = ::openVpnSettings,
+                    onOpenPrivacy = ::openPrivacy
                 )
             }
         }
@@ -138,7 +147,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openPrivacy() {
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PRIVACY_URL)))
+        }.onFailure {
+            Toast.makeText(this, "无法打开隐私说明", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private companion object {
         const val KEY_PENDING_PROBE = "pending_probe"
+        const val PRIVACY_URL = "https://aka.doubaocdn.com/s/9EX5YNoJts"
     }
 }

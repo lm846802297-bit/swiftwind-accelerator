@@ -93,6 +93,7 @@ fun NodesScreen(
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val probeProgress = ui.probeProgress
     val lastChecked = ui.healthCheckedAt.values.maxOrNull()
+    val staleCount = ui.healthCheckedAt.values.count { now - it > HEALTH_TTL_MS }
     LaunchedEffect(Unit) {
         while (true) {
             delay(30_000L)
@@ -163,8 +164,8 @@ fun NodesScreen(
             text = when {
                 probeProgress != null -> "体检进行中 · 结果完成后刷新"
                 lastChecked == null -> "尚未体检"
-                now - lastChecked > HEALTH_TTL_MS ->
-                    "上次体检 · ${relativeTime(lastChecked, now)}（结果已过期）"
+                staleCount > 0 ->
+                    "上次体检 · ${relativeTime(lastChecked, now)} · ${staleCount} 条标签已过期，建议复检"
                 else -> "上次体检 · ${relativeTime(lastChecked, now)}"
             },
             style = MaterialTheme.typography.bodySmall,
@@ -180,28 +181,44 @@ fun NodesScreen(
         if (ui.nodes.isEmpty()) {
             EmptyNodes(Modifier.weight(1f))
         } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f).clipToBounds(),
-                contentPadding = PaddingValues(bottom = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(ui.nodes, key = { it.id }) { node ->
-                    val checkedAt = ui.healthCheckedAt[node.id]
-                    val health = if (checkedAt != null && now - checkedAt > HEALTH_TTL_MS) {
-                        NodeHealth.UNKNOWN
-                    } else {
-                        ui.health[node.id] ?: NodeHealth.UNKNOWN
+            Box(Modifier.weight(1f)) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().clipToBounds(),
+                    contentPadding = PaddingValues(bottom = 34.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(ui.nodes, key = { it.id }) { node ->
+                        val checkedAt = ui.healthCheckedAt[node.id]
+                        val health = if (checkedAt != null && now - checkedAt > HEALTH_TTL_MS) {
+                            NodeHealth.UNKNOWN
+                        } else {
+                            ui.health[node.id] ?: NodeHealth.UNKNOWN
+                        }
+                        NodeRow(
+                            node = node,
+                            selected = node.id == ui.selectedId,
+                            health = health,
+                            checkedAt = checkedAt,
+                            now = now,
+                            enabled = nodeActionsEnabled,
+                            onSelect = { onSelect(node.id) },
+                            onDelete = { pendingDelete = node }
+                        )
                     }
-                    NodeRow(
-                        node = node,
-                        selected = node.id == ui.selectedId,
-                        health = health,
-                        enabled = nodeActionsEnabled,
-                        onSelect = { onSelect(node.id) },
-                        onDelete = { pendingDelete = node }
-                    )
+                    item { Spacer(Modifier.height(10.dp)) }
                 }
-                item { Spacer(Modifier.height(6.dp)) }
+                // 列表底部渐隐，遮住滚动边界处偶尔露出的下一行顶部。
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(18.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color(0xFF0B0710))
+                            )
+                        )
+                )
             }
         }
 
@@ -445,10 +462,13 @@ private fun NodeRow(
     node: Node,
     selected: Boolean,
     health: NodeHealth,
+    checkedAt: Long?,
+    now: Long,
     enabled: Boolean,
     onSelect: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val expired = checkedAt != null && now - checkedAt > HEALTH_TTL_MS
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -490,8 +510,19 @@ private fun NodeRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (checkedAt != null) {
+                    Text(
+                        "上次体检 · ${relativeTime(checkedAt, now)}" +
+                            if (expired) " · 结果已过期" else "",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                        color = TextSecondary.copy(alpha = 0.62f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
-            HealthBadge(health)
+            HealthBadge(health, expired = expired)
             SourceChip(node.source)
             IconButton(
                 onClick = onDelete,
@@ -510,7 +541,19 @@ private fun NodeRow(
 }
 
 @Composable
-private fun HealthBadge(health: NodeHealth) {
+private fun HealthBadge(health: NodeHealth, expired: Boolean) {
+    if (expired) {
+        Text(
+            "待复检",
+            style = MaterialTheme.typography.labelLarge.copy(fontSize = 10.sp),
+            color = TextSecondary,
+            modifier = Modifier
+                .padding(end = 5.dp)
+                .background(TextSecondary.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 6.dp, vertical = 3.dp)
+        )
+        return
+    }
     if (health == NodeHealth.UNKNOWN) return
     val (label, color) = when (health) {
         NodeHealth.CHECKING -> "检测中" to Sky

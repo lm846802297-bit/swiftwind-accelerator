@@ -47,7 +47,8 @@ import com.swiftwind.accelerator.viewmodel.UiState
 @Composable
 fun SettingsScreen(
     ui: UiState,
-    onOpenVpnSettings: () -> Unit
+    onOpenVpnSettings: () -> Unit,
+    onOpenPrivacy: () -> Unit
 ) {
     Column(
         Modifier
@@ -114,7 +115,8 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Lock,
                     title = "隐私",
                     subtitle = "不收集任何用户数据；WARP 节点由 Cloudflare 提供",
-                    value = ""
+                    onClick = onOpenPrivacy,
+                    showArrow = true
                 )
             }
         }

@@ -9,6 +9,7 @@ import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.BadConfigException
 import com.wireguard.config.Config
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -106,7 +107,8 @@ object TunnelController {
     suspend fun connect(
         configText: String,
         verifyData: Boolean = true,
-        handshakeTimeoutMs: Long = 2000L
+        handshakeTimeoutMs: Long = 2000L,
+        stabilityMs: Long = 1200L
     ) = withContext(Dispatchers.IO) {
         synchronized(operationGate) {
             if (probing) throw IllegalStateException("正在体检节点，请稍后再连接")
@@ -132,7 +134,7 @@ object TunnelController {
                 delay(400L)
                 Log.d("SwiftWindSwitch", "connect old-down +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
             }
-            startTunnel(config)
+            startTunnel(config, stabilityMs)
             Log.d("SwiftWindSwitch", "connect tunnel-up +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
             // 隧道“UP”不等于节点可用：必须收到 WireGuard 握手，否则会把手动选择的
             // 死节点显示成“已连接”，用户实际没有网络。
@@ -213,12 +215,12 @@ object TunnelController {
      * 建立隧道并做稳定性校验。ColorOS 上偶发“Device started 后 0.1s 被系统断开”，
      * 因此不能只看 setState 是否返回成功，必须确认隧道连续存活，失败时清场重试一次。
      */
-    private suspend fun startTunnel(config: Config) {
+    private suspend fun startTunnel(config: Config, stabilityMs: Long) {
         var lastError: Throwable? = null
         repeat(2) { attempt ->
             val ok = runCatching {
                 backend.setState(tunnel, Tunnel.State.UP, config)
-                awaitStableRunning(1200L, 2800L)
+                awaitStableRunning(stabilityMs, 2800L)
             }.getOrElse { t ->
                 lastError = t
                 false
@@ -279,6 +281,8 @@ object TunnelController {
                 }
                 probing = true
             }
+            val probeStartedAt = SystemClock.elapsedRealtime()
+            Log.d("SwiftWindProbe", "probe start")
             try {
                 backend.setState(tunnel, Tunnel.State.UP, config)
                 val handshakeMs = awaitHandshake(timeoutMs)
@@ -295,8 +299,19 @@ object TunnelController {
                     throughputKbps = speed.second
                 )
             } finally {
-                runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
-                synchronized(operationGate) { probing = false }
+                val cleanupStartedAt = SystemClock.elapsedRealtime()
+                // 取消体检时也要等隧道真正停止，再把 probing 放开；
+                // 否则紧接着点“连接”可能和还在回收的旧隧道抢状态。
+                withContext(NonCancellable) {
+                    runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                    runCatching { awaitRunning(false, 700L) }
+                    synchronized(operationGate) { probing = false }
+                }
+                Log.d(
+                    "SwiftWindProbe",
+                    "probe cleanup done +${SystemClock.elapsedRealtime() - cleanupStartedAt}ms " +
+                        "(total ${SystemClock.elapsedRealtime() - probeStartedAt}ms)"
+                )
             }
         }
 

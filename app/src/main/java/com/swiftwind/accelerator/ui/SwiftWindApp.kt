@@ -39,7 +39,8 @@ fun SwiftWindApp(
     viewModel: AppViewModel,
     onToggleConnection: () -> Unit,
     onProbeNodes: () -> Unit,
-    onOpenVpnSettings: () -> Unit
+    onOpenVpnSettings: () -> Unit,
+    onOpenPrivacy: () -> Unit
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -82,7 +83,8 @@ fun SwiftWindApp(
                         )
                         else -> SettingsScreen(
                             ui = ui,
-                            onOpenVpnSettings = onOpenVpnSettings
+                            onOpenVpnSettings = onOpenVpnSettings,
+                            onOpenPrivacy = onOpenPrivacy
                         )
                     }
                 }

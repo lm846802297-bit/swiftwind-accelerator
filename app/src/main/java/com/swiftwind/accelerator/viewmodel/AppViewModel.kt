@@ -73,6 +73,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private var statsJob: Job? = null
     private var probeJob: Job? = null
+    private var probeCancelRequestedAt = 0L
     // connect() 在真正进入 Connecting 状态前有一小段异步窗口；
     // 用 Job 做同步闸门，避免快速双击时两条连接协程互相覆盖状态。
     private var connectJob: Job? = null
@@ -200,6 +201,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 quality = emptyMap()
             )
         }
+        probeCancelRequestedAt = 0L
         probeJob = viewModelScope.launch {
             var available = 0
             var firstError: String? = null
@@ -285,12 +287,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             } catch (t: Throwable) {
                 notify("体检异常：${TunnelController.mapError(t)}")
             } finally {
+                val cancelLatency = if (probeCancelRequestedAt > 0L) {
+                    SystemClock.elapsedRealtime() - probeCancelRequestedAt
+                } else {
+                    -1L
+                }
                 _ui.update { state ->
                     val clearedHealth = state.health.mapValues { (_, value) ->
                         if (value == NodeHealth.CHECKING) NodeHealth.UNKNOWN else value
                     }
                     state.copy(busy = false, probeProgress = null, health = clearedHealth)
                 }
+                if (cancelLatency >= 0L) {
+                    Log.d("SwiftWindProbe", "probe ui cleared +${cancelLatency}ms")
+                }
+                probeCancelRequestedAt = 0L
                 probeJob = null
             }
         }
@@ -299,6 +310,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelProbe() {
         val job = probeJob ?: return
         if (job.isCompleted) return
+        probeCancelRequestedAt = SystemClock.elapsedRealtime()
+        Log.d("SwiftWindProbe", "cancel requested")
         _ui.update { state ->
             state.copy(probeProgress = state.probeProgress?.copy(cancelling = true))
         }
@@ -404,7 +417,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val switchStartedAt = SystemClock.elapsedRealtime()
                     Log.d("SwiftWindSwitch", "switch start target=${node.name} from=${previous?.name}")
                     try {
-                        TunnelController.connect(node.config)
+                        // 已知不可用的线路用更短的握手窗口，失败时更快回到原节点；
+                        // 未测/可用线路保留 1.2 秒，避免误杀刚恢复的节点。
+                        val targetHealth = _ui.value.health[node.id]
+                        val targetHandshakeMs =
+                            if (targetHealth == NodeHealth.FAIL) 1000L else 1200L
+                        TunnelController.connect(
+                            node.config,
+                            handshakeTimeoutMs = targetHandshakeMs,
+                            stabilityMs = 700L
+                        )
                         NodeStore.selectedId = id
                         _ui.update { it.copy(selectedId = id) }
                         markHealthy(id)
@@ -587,7 +609,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 切换失败后的恢复顺序：原节点优先，其次按健康度/质量分尝试少量 WARP 备用线。
      * 恢复阶段仍要做数据面验证：只握手成功但传不了数据时，不能把界面伪装成“已连接”。
-     * 1.5 秒握手超时 + 一次小请求，健康节点通常能在几百毫秒内恢复。
+     * 1.2 秒握手超时 + 0.7 秒稳定窗口 + 一次小请求，健康节点通常能在一秒多恢复。
      */
     private suspend fun restoreAfterSwitchFailure(previous: Node, failedTargetId: String): Node? {
         val attempted = mutableSetOf(previous.id, failedTargetId)
@@ -600,7 +622,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 TunnelController.connect(
                     candidate.config,
                     verifyData = true,
-                    handshakeTimeoutMs = 1500L
+                    handshakeTimeoutMs = 1200L,
+                    stabilityMs = 700L
                 )
                 return candidate
             } catch (t: Throwable) {
