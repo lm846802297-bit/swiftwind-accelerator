@@ -33,6 +33,29 @@ class EgressRegionTest {
     }
 
     @Test
+    fun displaysChinaRegionsWithShortNames() {
+        assertEquals("中国香港", EgressRegion.displayName("HK"))
+        assertEquals("中国台湾", EgressRegion.displayName("TW"))
+        assertEquals("中国澳门", EgressRegion.displayName("MO"))
+        assertEquals("中国大陆", EgressRegion.displayName("CN"))
+    }
+
+    @Test
+    fun regionLabelUsesChinaRegionName() {
+        val node = Node(
+            name = "WARP 优选2",
+            config = "config",
+            endpoint = "1.1.1.1:2408",
+            source = NodeSource.WARP,
+            regionCode = "HK"
+        )
+        assertEquals(
+            "中国香港 · 最近检测出口",
+            EgressRegion.label(node, regionFresh = true, hasCheckedAt = true)
+        )
+    }
+
+    @Test
     fun warpWithoutDetectedCountryIsHonestAboutAnycast() {
         val node = Node(
             name = "WARP 优选1",

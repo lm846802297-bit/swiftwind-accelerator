@@ -6,7 +6,7 @@ import java.util.Locale
  * 节点出口地区。
  *
  * WARP 入口是 Anycast，节点本身的 IP 不代表固定国家；这里只展示一次真实
- * 隧道探测中 Cloudflare trace 返回的出口国家/地区，并标明“上次体检出口”。
+ * 隧道探测中 Cloudflare trace 返回的出口国家/地区，并标明“最近检测出口”。
  */
 object EgressRegion {
 
@@ -25,6 +25,8 @@ object EgressRegion {
 
     fun displayName(code: String?): String? {
         val normalized = normalizeCode(code) ?: return null
+        // 中国相关地区使用固定短名，避免系统 Locale 输出“中国香港特别行政区”等长名称。
+        commonNames[normalized]?.let { return it }
         val chineseName = runCatching {
             Locale.Builder()
                 .setRegion(normalized)
@@ -34,7 +36,7 @@ object EgressRegion {
         if (!chineseName.isNullOrBlank() && !chineseName.equals(normalized, ignoreCase = true)) {
             return chineseName
         }
-        return commonNames[normalized] ?: normalized
+        return normalized
     }
 
     /**
@@ -59,6 +61,8 @@ object EgressRegion {
         "SG" to "新加坡",
         "HK" to "中国香港",
         "TW" to "中国台湾",
+        "MO" to "中国澳门",
+        "CN" to "中国大陆",
         "GB" to "英国",
         "DE" to "德国",
         "FR" to "法国",
