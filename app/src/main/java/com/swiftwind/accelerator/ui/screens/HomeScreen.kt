@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.swiftwind.accelerator.R
+import com.swiftwind.accelerator.data.EgressRegion
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.ui.GlassCard
 import com.swiftwind.accelerator.ui.theme.Danger
@@ -210,6 +211,14 @@ private fun NodeSelector(node: Node?, onClick: () -> Unit) {
                         node.endpoint.ifBlank { "WireGuard" },
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        // 首页只展示最近一次检测结果；WARP 的出口可能随 Anycast 调度变化。
+                        EgressRegion.label(node, regionFresh = true, hasCheckedAt = true),
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                        color = TextSecondary.copy(alpha = 0.6f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
