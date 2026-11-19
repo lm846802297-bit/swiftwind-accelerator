@@ -387,6 +387,9 @@ object TunnelController {
      * 因此不能只看 setState 是否返回成功，必须确认隧道连续存活，失败时清场重试一次。
      */
     private suspend fun startTunnel(config: Config, stabilityMs: Long) {
+        // 每次建立隧道前把 GoBackend 的静态 future 重新指向自定义服务；
+        // 等待超时后仍走原有服务流程，不阻塞用户连接。
+        HuayiVpnServiceBridge.prepare(appContext, 1200L)
         var lastError: Throwable? = null
         repeat(2) { attempt ->
             val ok = runCatching {

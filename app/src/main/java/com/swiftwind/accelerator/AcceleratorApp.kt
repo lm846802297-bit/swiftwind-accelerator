@@ -2,6 +2,7 @@ package com.swiftwind.accelerator
 
 import android.app.Application
 import com.swiftwind.accelerator.data.NodeStore
+import com.swiftwind.accelerator.vpn.HuayiVpnServiceBridge
 import com.swiftwind.accelerator.vpn.TunnelController
 
 class AcceleratorApp : Application() {
@@ -10,5 +11,6 @@ class AcceleratorApp : Application() {
         CrashLogger.install(this)
         NodeStore.init(this)
         TunnelController.init(this)
+        HuayiVpnServiceBridge.install(this)
     }
 }

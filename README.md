@@ -11,7 +11,7 @@
 - 订阅链接拉取，自动去重
 - WireGuard 隧道连接、断开、实时上下行流量与连接时长
 - 节点切换、删除、持久化选择；切换失败时自动恢复原节点或尝试备用 WARP
-- 连接方式：智能连接（中国 IPv4、私有/局域网与链路本地地址直连，非中国 IPv4 与全球 IPv6 走 WARP）与全局连接（当前节点的全部 IPv4 / IPv6 流量都走 VPN）
+- 连接方式：智能连接（中国 IPv4、私有/局域网地址直连，非中国 IPv4 与全球 IPv6 走 WARP）与全局连接（当前节点的全部 IPv4 / IPv6 流量都走 VPN）。IPv6 链路本地 `fe80::1` 默认网关通过自定义 VpnService 的 `excludeRoute(fe80::1/128)` 保持直连；其余 `fe80::/64` 仍由 Android 内核为 tun0 自动生成，应用层无法整段删除。
 - 连接期间前台保活服务，降低 Android 在后台回收 VPN 进程的概率
 - 深色粉黑舞台风 Jetpack Compose 界面
 
@@ -85,7 +85,7 @@ WARP 注册接口会返回具体分配到的 IPv4 / IPv6 入口和端口列表�
 - 绝大多数中国 IPv4 目标不加入 VPN 路由，继续走 Wi‑Fi / 5G 本地网络；
 - 非中国 IPv4 目标加入 VPN 路由，走 WARP；
 - IPv6 使用 `2000::/3`（全球单播）走 VPN，避免 IPv6 目标绕过代理；
-- 内网、回环、链路本地、组播和保留地址不加入 VPN 路由；
+- 内网、回环、组播和保留地址不加入 VPN 路由；IPv6 `fe80::1` 默认网关通过自定义 VpnService 排除，其他 `fe80::/64` 地址仍受 Android 内核 link-local 路由影响；
 - 全局连接则使用 `0.0.0.0/0, ::/0`，所有流量都走 VPN；
 - 当前智能连接使用 `foreign_ipv4.txt` 的压缩 CIDR 表（1208 条），由 `ChinaIPsBGP`（blackmatrix7/ios_rule_script，上游 `misakaio/chnroutes2`）按 65536 个 IP 的间隙合并生成，并额外剔除 RFC1918、回环、链路本地、CGNAT、组播与保留网段。压缩是为了避开 Android `NetworkMonitorManager` 的 Binder 事务上限；代价是少量中国 IPv4 段会与海外网段合并而走 VPN，实测约覆盖 6.6% 的中国 IPv4 地址；不压缩的 2550 条版本在模拟器上会触 `TransactionTooLargeException`。
 
