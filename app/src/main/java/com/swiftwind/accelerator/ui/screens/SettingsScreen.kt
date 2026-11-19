@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.swiftwind.accelerator.BuildConfig
 import com.swiftwind.accelerator.R
+import com.swiftwind.accelerator.data.ConnectionMode
 import com.swiftwind.accelerator.ui.GlassCard
 import com.swiftwind.accelerator.ui.theme.Pink
 import com.swiftwind.accelerator.ui.theme.Rose
@@ -78,6 +80,19 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Public,
                     title = "当前节点",
                     value = ui.selectedNode?.name ?: "未选择"
+                )
+                RowDivider()
+                SettingRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = "连接方式",
+                    subtitle = when (ui.connectionMode) {
+                        ConnectionMode.SMART -> "连接前自动选择最优线路"
+                        ConnectionMode.GLOBAL -> "使用当前节点，全部应用流量走 VPN"
+                    },
+                    value = when (ui.connectionMode) {
+                        ConnectionMode.SMART -> "智能连接"
+                        ConnectionMode.GLOBAL -> "全局连接"
+                    }
                 )
                 RowDivider()
                 SettingRow(

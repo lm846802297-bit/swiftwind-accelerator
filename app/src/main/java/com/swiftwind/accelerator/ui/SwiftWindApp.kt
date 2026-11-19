@@ -71,7 +71,8 @@ fun SwiftWindApp(
                         0 -> HomeScreen(
                             ui = ui,
                             onToggle = onToggleConnection,
-                            onOpenNodes = { tab = 1 }
+                            onOpenNodes = { tab = 1 },
+                            onSelectMode = viewModel::setConnectionMode
                         )
                         1 -> NodesScreen(
                             ui = ui,

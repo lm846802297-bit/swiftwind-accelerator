@@ -12,6 +12,7 @@ object NodeStore {
     private const val KEY_NODES = "nodes"
     private const val KEY_SELECTED = "selected_id"
     private const val KEY_HEALTH = "health_records"
+    private const val KEY_CONNECTION_MODE = "connection_mode"
 
     data class StoredHealth(
         val health: Map<String, NodeHealth> = emptyMap(),
@@ -39,6 +40,21 @@ object NodeStore {
         get() = prefs.getString(KEY_SELECTED, null)
         set(value) {
             prefs.edit().putString(KEY_SELECTED, value).apply()
+        }
+
+    /**
+     * 默认使用全局连接，保持升级前“所有应用走 VPN、使用当前节点”的行为。
+     * 智能连接只改变连接前的选线策略，不改变系统 VPN 的全局路由。
+     */
+    var connectionMode: ConnectionMode
+        get() = runCatching {
+            ConnectionMode.valueOf(
+                prefs.getString(KEY_CONNECTION_MODE, ConnectionMode.GLOBAL.name)
+                    ?: ConnectionMode.GLOBAL.name
+            )
+        }.getOrDefault(ConnectionMode.GLOBAL)
+        set(value) {
+            prefs.edit().putString(KEY_CONNECTION_MODE, value.name).apply()
         }
 
     /**

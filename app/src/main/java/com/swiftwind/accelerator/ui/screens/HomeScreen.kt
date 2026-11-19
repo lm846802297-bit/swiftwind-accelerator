@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -25,9 +26,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.LocalFlorist
 import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -40,12 +43,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.swiftwind.accelerator.R
+import com.swiftwind.accelerator.data.ConnectionMode
 import com.swiftwind.accelerator.data.EgressRegion
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.ui.GlassCard
@@ -68,7 +73,8 @@ import com.swiftwind.accelerator.vpn.VpnState
 fun HomeScreen(
     ui: UiState,
     onToggle: () -> Unit,
-    onOpenNodes: () -> Unit
+    onOpenNodes: () -> Unit,
+    onSelectMode: (ConnectionMode) -> Unit
 ) {
     Column(
         Modifier
@@ -87,6 +93,14 @@ fun HomeScreen(
                 ui.regionVerifiedId != null &&
                 ui.regionVerifiedId == ui.selectedNode?.id,
             onClick = onOpenNodes
+        )
+        Spacer(Modifier.height(10.dp))
+        ConnectionModeRow(
+            mode = ui.connectionMode,
+            enabled = !ui.busy &&
+                ui.vpnState !is VpnState.Connecting &&
+                ui.vpnState !is VpnState.Disconnecting,
+            onSelect = onSelectMode
         )
         Spacer(Modifier.weight(0.9f))
         ConnectOrb(
@@ -250,6 +264,91 @@ private fun NodeSelector(
             }
             Text("切换", style = MaterialTheme.typography.labelLarge, color = Pink)
             Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Pink, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+private fun ConnectionModeRow(
+    mode: ConnectionMode,
+    enabled: Boolean,
+    onSelect: (ConnectionMode) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        ConnectionModeCard(
+            modifier = Modifier.weight(1f),
+            selected = mode == ConnectionMode.SMART,
+            enabled = enabled,
+            icon = Icons.Rounded.AutoAwesome,
+            title = "智能连接",
+            subtitle = "自动选最优",
+            onClick = { onSelect(ConnectionMode.SMART) }
+        )
+        ConnectionModeCard(
+            modifier = Modifier.weight(1f),
+            selected = mode == ConnectionMode.GLOBAL,
+            enabled = enabled,
+            icon = Icons.Rounded.Public,
+            title = "全局连接",
+            subtitle = "全部应用走 VPN",
+            onClick = { onSelect(ConnectionMode.GLOBAL) }
+        )
+    }
+}
+
+@Composable
+private fun ConnectionModeCard(
+    modifier: Modifier,
+    selected: Boolean,
+    enabled: Boolean,
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(16.dp)
+    val background = if (selected) {
+        Brush.linearGradient(listOf(Pink.copy(alpha = 0.20f), Rose.copy(alpha = 0.08f)))
+    } else {
+        Brush.linearGradient(listOf(Color(0xFF1D1123), Color(0xFF160D1C)))
+    }
+    Row(
+        modifier = modifier
+            .clip(shape)
+            .background(background)
+            .border(
+                width = 1.dp,
+                color = if (selected) Pink.copy(alpha = 0.55f) else Stroke,
+                shape = shape
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (selected) Pink else TextSecondary.copy(alpha = 0.75f),
+            modifier = Modifier.size(18.dp)
+        )
+        Column(Modifier.padding(start = 8.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
+                color = if (selected) TextPrimary else TextSecondary,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp),
+                color = if (selected) Rose.copy(alpha = 0.85f) else TextSecondary.copy(alpha = 0.58f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

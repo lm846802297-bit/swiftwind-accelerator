@@ -10,12 +10,14 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.swiftwind.accelerator.data.EgressRegion
+import com.swiftwind.accelerator.data.ConnectionMode
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.data.NodeSource
 import com.swiftwind.accelerator.data.NodeStore
 import com.swiftwind.accelerator.net.ConfigImporter
 import com.swiftwind.accelerator.net.SubscriptionFetcher
 import com.swiftwind.accelerator.net.WarpClient
+import com.swiftwind.accelerator.vpn.SmartNodePicker
 import com.swiftwind.accelerator.vpn.TunnelController
 import com.swiftwind.accelerator.vpn.TunnelStats
 import com.swiftwind.accelerator.vpn.VpnState
@@ -69,7 +71,10 @@ data class UiState(
     // 网络恢复后正在重建隧道。此时底层网络已回来，但 WireGuard 握手
     // 还没完成，不能提前显示“已连接”。
     val reconnecting: Boolean = false,
-    val probeProgress: ProbeProgress? = null
+    val probeProgress: ProbeProgress? = null,
+    // 智能连接 = 连接前自动选健康且质量分最高的线路；
+    // 全局连接 = 使用当前选中节点，全部应用流量走系统 VPN。
+    val connectionMode: ConnectionMode = ConnectionMode.GLOBAL
 ) {
     val selectedNode: Node?
         get() = nodes.firstOrNull { it.id == selectedId }
@@ -126,7 +131,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             vpnState = TunnelController.state.value,
             networkAvailable = hasUnderlyingInternet(),
             health = storedHealth.health.filterKeys { it in nodeIds },
-            healthCheckedAt = storedHealth.checkedAt.filterKeys { it in nodeIds }
+            healthCheckedAt = storedHealth.checkedAt.filterKeys { it in nodeIds },
+            connectionMode = NodeStore.connectionMode
         )
 
         viewModelScope.launch {
@@ -655,9 +661,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setConnectionMode(mode: ConnectionMode) {
+        if (_ui.value.connectionMode == mode) return
+        NodeStore.connectionMode = mode
+        _ui.update { it.copy(connectionMode = mode) }
+        val connected = TunnelController.state.value is VpnState.Connected
+        when (mode) {
+            ConnectionMode.SMART -> {
+                notify(
+                    if (connected) {
+                        "已切换为智能连接，下次连接会自动选择最优线路"
+                    } else {
+                        "已切换为智能连接，连接时会自动选择最优线路"
+                    }
+                )
+            }
+            ConnectionMode.GLOBAL -> {
+                notify(
+                    if (connected) {
+                        "已切换为全局连接，当前节点和全部应用继续使用 VPN"
+                    } else {
+                        "已切换为全局连接，将使用当前节点，全部应用流量走 VPN"
+                    }
+                )
+            }
+        }
+    }
+
     fun connect() {
-        val node = _ui.value.selectedNode
-        if (node == null) {
+        val current = _ui.value.selectedNode
+        if (current == null && _ui.value.nodes.isEmpty()) {
             notify("请先添加一个节点")
             return
         }
@@ -678,6 +711,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             notify("正在恢复网络连接，请稍后再试")
             return
         }
+
+        // 智能连接只在“发起新连接”时选线；已经连接时用户点主按钮是断开，
+        // 不会因为切换模式而偷偷改走另一条节点。
+        val node = if (_ui.value.connectionMode == ConnectionMode.SMART) {
+            val now = System.currentTimeMillis()
+            val health = _ui.value.nodes.associate { it.id to effectiveHealthFor(it.id, now) }
+            val picked = SmartNodePicker.pick(
+                nodes = _ui.value.nodes,
+                health = health,
+                quality = _ui.value.quality,
+                preferred = current
+            )
+            if (picked != null && picked.id != _ui.value.selectedId) {
+                NodeStore.selectedId = picked.id
+                _ui.update { it.copy(selectedId = picked.id) }
+                notify("智能连接：已选择“${picked.name}”")
+            }
+            picked ?: current
+        } else {
+            current
+        }
+        if (node == null) {
+            notify("请先添加一个节点")
+            return
+        }
+
         networkReconnectJob?.cancel()
         networkReconnectJob = null
         networkReconnectArmed = false
