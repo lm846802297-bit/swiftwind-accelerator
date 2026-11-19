@@ -92,6 +92,16 @@ object EgressRegion {
         if (!regionFresh && hasCheckedAt) return "出口地区待复检"
         val country = displayName(node.regionCode)
         if (country != null) {
+            // 有地区但没有本轮体检时间，说明是上一次会话/上一次连接的历史结果，
+            // 不能写成“最近检测出口”，否则用户会误以为这是当前出口。
+            if (!hasCheckedAt) {
+                val detail = node.regionDetail?.trim()?.takeIf { it.isNotBlank() && it != country }
+                return if (detail != null) {
+                    "上次检测出口 · $country · $detail"
+                } else {
+                    "上次检测出口 · $country"
+                }
+            }
             // 香港/台湾/澳门本身就是地区级名称，不再叠加城市。
             if (node.regionCode in setOf("HK", "TW", "MO")) {
                 return "$country · 最近检测出口"
@@ -112,6 +122,11 @@ object EgressRegion {
         if (!regionFresh && hasCheckedAt) return "出口地区待复检"
         val country = displayName(node.regionCode)
         if (country != null) {
+            // 没有本轮时间戳时只能称为“上次检测”，不能冒充当前出口。
+            if (!hasCheckedAt) {
+                val detail = node.regionDetail?.trim()?.takeIf { it.isNotBlank() && it != country }
+                return if (detail != null) "上次检测 · $detail" else "上次检测 · $country"
+            }
             if (node.regionCode in setOf("HK", "TW", "MO")) return country
             val detail = node.regionDetail?.trim()?.takeIf { it.isNotBlank() && it != country }
             return if (detail != null) "$country · $detail" else country

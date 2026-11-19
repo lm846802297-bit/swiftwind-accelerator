@@ -148,4 +148,25 @@ class EgressRegionTest {
             EgressRegion.label(node, regionFresh = false, hasCheckedAt = true)
         )
     }
+
+    @Test
+    fun regionWithoutThisSessionTimestampIsMarkedHistorical() {
+        val node = Node(
+            name = "WARP 优选3",
+            config = "config",
+            endpoint = "188.114.99.1:2408",
+            source = NodeSource.WARP,
+            regionCode = "CN",
+            regionDetail = "上海"
+        )
+        // 没有本轮体检时间，只能称为“上次检测”，不能伪装成当前出口。
+        assertEquals(
+            "上次检测 · 上海",
+            EgressRegion.summary(node, regionFresh = false, hasCheckedAt = false)
+        )
+        assertEquals(
+            "上次检测出口 · 中国大陆 · 上海",
+            EgressRegion.label(node, regionFresh = false, hasCheckedAt = false)
+        )
+    }
 }

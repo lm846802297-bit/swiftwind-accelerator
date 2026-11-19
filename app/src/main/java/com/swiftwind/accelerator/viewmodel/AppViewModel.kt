@@ -127,15 +127,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.update { it.copy(vpnState = state) }
                 when (state) {
                     is VpnState.Connected -> {
-                        // 连接成功后的健康刷新由实际发起连接的一方写入，
-                        // 避免自动换线时把失败的原节点误标成“可用”。
+                        // 连接成功后的健康刷新和出口地区由实际发起连接的一方写入。
+                        // 自动换线时 Connected 可能早于 selectedId 落库，不能在这里
+                        // 用当时的选中节点做地区检测，否则会把新出口写到旧节点上。
+                        // 这里也不能取消 regionJob：显式地区检测可能已经在本轮回调前后启动。
                         startStatsPolling()
-                        regionJob?.cancel()
-                        detectCurrentRegion()
                     }
                     is VpnState.Connecting -> {
                         // 切换节点时旧隧道的流量/时长不属于新连接，先清空，
                         // 避免界面在“正在连接”阶段继续显示上一节点的统计。
+                        regionJob?.cancel()
                         _ui.update { it.copy(stats = TunnelStats()) }
                     }
                     is VpnState.Disconnecting -> Unit
@@ -149,7 +150,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         TunnelController.syncState(adoptRunningTunnel = true)
         if (TunnelController.state.value is VpnState.Connected) {
-            _ui.value.selectedId?.let { markHealthy(it) }
+            _ui.value.selectedId?.let {
+                markHealthy(it)
+                detectCurrentRegion(it)
+            }
             startStatsPolling()
             // syncState 只能确认系统里还留着本应用的隧道，不能证明数据面仍然可用。
             // 进程重启后补一次后台复核，避免残留隧道被长期显示成“已连接”。
@@ -525,6 +529,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         NodeStore.selectedId = id
                         _ui.update { it.copy(selectedId = id) }
                         markHealthy(id)
+                        detectCurrentRegion(id)
                         Log.d(
                             "SwiftWindSwitch",
                             "switch success +${SystemClock.elapsedRealtime() - switchStartedAt}ms"
@@ -549,6 +554,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 NodeStore.selectedId = restoredNode.id
                                 _ui.update { it.copy(selectedId = restoredNode.id) }
                                 markHealthy(restoredNode.id)
+                                detectCurrentRegion(restoredNode.id)
                                 Log.d(
                                     "SwiftWindSwitch",
                                     "switch rollback +${SystemClock.elapsedRealtime() - switchStartedAt}ms -> ${restoredNode.name}"
@@ -693,6 +699,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     notify("已自动切换到“${current.name}”")
                 }
                 markHealthy(current.id)
+                detectCurrentRegion(current.id)
                 return Result.success(current)
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -868,6 +875,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (synchronized(underlyingNetworks) { underlyingNetworks.isEmpty() }) return
         val node = _ui.value.selectedNode ?: return
         if (networkReconnectJob?.isActive == true) return
+        // 体检、手动连接/断开或心跳自动换线正在进行时，不要再启动网络恢复任务，
+        // 否则两个协程会同时进入 TunnelController 的 Connecting 状态，互相覆盖。
+        if (_ui.value.busy || _ui.value.reconnecting || heartbeatFailoverInProgress) return
         // 在启动协程前先同步占位，避免 onCapabilitiesChanged / onLost
         // 连续回调同时通过 isActive 检查，启动两条互相覆盖的重连协程。
         // 网络丢失事件只消费一次；重连失败后由用户手动处理，不再持续自旋。
@@ -1096,6 +1106,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     NodeStore.selectedId = candidate.id
                     _ui.update { it.copy(selectedId = candidate.id) }
                     markHealthy(candidate.id)
+                    detectCurrentRegion(candidate.id)
                     Log.d(
                         "SwiftWindHealth",
                         "heartbeat failover success -> ${candidate.name}"
@@ -1129,9 +1140,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * 连接成功后顺带读取一次当前出口地区；它不挡连接流程，失败也不影响连接。
      * WARP 的 Anycast 出口可能变化，因此只写入“最近检测出口”，并在体检过期后隐藏。
      */
-    private fun detectCurrentRegion() {
-        val nodeId = _ui.value.selectedId ?: return
+    private fun detectCurrentRegion(nodeIdArg: String? = _ui.value.selectedId) {
+        val nodeId = nodeIdArg ?: return
         val generation = TunnelController.connectionGeneration()
+        regionJob?.cancel()
         regionJob = viewModelScope.launch(Dispatchers.IO) {
             val location = runCatching {
                 TunnelController.currentEgressLocation()
@@ -1158,7 +1170,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 node
             }
         }
-        if (!changed) return
+        if (!changed) {
+            // 同一出口再次检测时不会写库，但仍留一条校验日志，便于真机排查
+            // “地区没有更新”到底是未执行检测，还是出口确实没变。
+            Log.d("SwiftWindRegion", "node=$nodeId egress=$country${detail?.let { " / $it" } ?: ""} verified unchanged")
+            return
+        }
         NodeStore.saveNodes(updated)
         _ui.update { it.copy(nodes = updated) }
         Log.d("SwiftWindRegion", "node=$nodeId egress=$country${detail?.let { " / $it" } ?: ""}")
