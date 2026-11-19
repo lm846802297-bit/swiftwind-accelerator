@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.swiftwind.accelerator.data.EgressRegion
 import com.wireguard.android.backend.BackendException
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
@@ -120,6 +121,15 @@ object TunnelController {
 
     /** 当前已连接隧道的代际；连接成功时更新，用于丢弃过期的异步复核结果。 */
     fun connectionGeneration(): Long = startedAt
+
+    /**
+     * 读取当前隧道实际的 Cloudflare 出口国家/地区。
+     * 这不是固定归属，只用于节点行上的“上次体检出口”。
+     */
+    suspend fun currentEgressCountry(): String? = withContext(Dispatchers.IO) {
+        if (!isRunning()) return@withContext null
+        fetchEgressCountry()
+    }
 
     /**
      * 连接中的周期性数据面探测。连续两次 HTTPS 请求都失败才返回 false；
@@ -447,11 +457,14 @@ object TunnelController {
                 val dataOk = speed.second > 0 || verifyTraffic()
                 // 只有握手成功还不够：必须真的通过隧道收到应用层数据，否则会把
                 // “能握手但无法上网”的节点误标为可用。
+                // 数据面可用时再读一次 trace，记录本次实际出口国家。
+                val egressCountry = if (dataOk) fetchEgressCountry() else null
                 ProbeResult(
                     healthy = dataOk,
                     handshakeMs = handshakeMs,
                     httpLatencyMs = speed.first,
-                    throughputKbps = speed.second
+                    throughputKbps = speed.second,
+                    egressCountry = egressCountry
                 )
             } finally {
                 val cleanupStartedAt = SystemClock.elapsedRealtime()
@@ -495,6 +508,36 @@ object TunnelController {
             delay(100)
         }
         return -1L
+    }
+
+    /** 通过隧道请求 Cloudflare trace，并解析 loc=XX 出口地区。 */
+    private suspend fun fetchEgressCountry(): String? = suspendCancellableCoroutine { cont ->
+        if (!isRunning()) {
+            if (cont.isActive) cont.resume(null)
+        } else {
+            val request = Request.Builder()
+                .url(VERIFY_URL)
+                .header("User-Agent", "SwiftWind/1.0")
+                .build()
+            val call = verifyClient.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) cont.resume(null)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val country = runCatching {
+                        response.use { resp ->
+                            if (!resp.isSuccessful) return@use null
+                            EgressRegion.parseTraceLoc(resp.body?.string())
+                        }
+                    }.getOrNull()
+                    val stable = if (isRunning()) country else null
+                    if (cont.isActive) cont.resume(stable)
+                }
+            })
+        }
     }
 
     /** 通过隧道请求一个极小页面，确认握手后真的能收到应用层数据。 */

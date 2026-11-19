@@ -37,7 +37,10 @@ data class ProbeResult(
     val healthy: Boolean,
     val handshakeMs: Long = 0L,
     val httpLatencyMs: Long = 0L,
-    val throughputKbps: Int = 0
+    val throughputKbps: Int = 0,
+    // 这次真实隧道探测里 Cloudflare trace 返回的出口国家/地区。
+    // 只作为“上次体检出口”，不等于节点永久归属。
+    val egressCountry: String? = null
 ) {
     val score: Int
         get() {

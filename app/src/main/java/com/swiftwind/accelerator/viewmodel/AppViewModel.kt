@@ -9,6 +9,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.swiftwind.accelerator.data.EgressRegion
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.data.NodeSource
 import com.swiftwind.accelerator.data.NodeStore
@@ -83,6 +84,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private var statsJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var regionJob: Job? = null
     private var probeJob: Job? = null
     private var probeCancelRequestedAt = 0L
     private var lastHeartbeatAt = 0L
@@ -128,6 +130,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         // 连接成功后的健康刷新由实际发起连接的一方写入，
                         // 避免自动换线时把失败的原节点误标成“可用”。
                         startStatsPolling()
+                        regionJob?.cancel()
+                        detectCurrentRegion()
                     }
                     is VpnState.Connecting -> {
                         // 切换节点时旧隧道的流量/时长不属于新连接，先清空，
@@ -285,6 +289,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 "score=${result.score} handshake=${result.handshakeMs}ms " +
                                 "http=${result.httpLatencyMs}ms throughput=${result.throughputKbps}kbps"
                         )
+                    }
+                    if (result?.egressCountry != null) {
+                        updateNodeRegion(node.id, result.egressCountry)
                     }
                     _ui.update { state ->
                         val progress = state.probeProgress ?: ProbeProgress(total = total)
@@ -892,6 +899,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         heartbeatJob?.cancel()
         heartbeatJob = null
+        regionJob?.cancel()
+        regionJob = null
         networkReconnectJob?.cancel()
         networkCallback?.let { callback ->
             runCatching { connectivityManager?.unregisterNetworkCallback(callback) }
@@ -1114,6 +1123,43 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             heartbeatFailoverInProgress = false
             _ui.update { it.copy(busy = false) }
         }
+    }
+
+    /**
+     * 连接成功后顺带读取一次当前出口国家；它不挡连接流程，失败也不影响连接。
+     * WARP 的 Anycast 出口可能变化，因此只写入“上次体检出口”，并在体检过期后隐藏。
+     */
+    private fun detectCurrentRegion() {
+        val nodeId = _ui.value.selectedId ?: return
+        val generation = TunnelController.connectionGeneration()
+        regionJob = viewModelScope.launch(Dispatchers.IO) {
+            val country = runCatching {
+                TunnelController.currentEgressCountry()
+            }.getOrNull() ?: return@launch
+            if (TunnelController.state.value !is VpnState.Connected ||
+                TunnelController.connectionGeneration() != generation
+            ) {
+                return@launch
+            }
+            updateNodeRegion(nodeId, country)
+        }
+    }
+
+    private fun updateNodeRegion(nodeId: String, rawCountry: String?) {
+        val country = EgressRegion.normalizeCode(rawCountry) ?: return
+        var changed = false
+        val updated = _ui.value.nodes.map { node ->
+            if (node.id == nodeId && node.regionCode != country) {
+                changed = true
+                node.copy(regionCode = country)
+            } else {
+                node
+            }
+        }
+        if (!changed) return
+        NodeStore.saveNodes(updated)
+        _ui.update { it.copy(nodes = updated) }
+        Log.d("SwiftWindRegion", "node=$nodeId egress=$country")
     }
 
     private fun effectiveHealthFor(id: String, now: Long = System.currentTimeMillis()): NodeHealth {

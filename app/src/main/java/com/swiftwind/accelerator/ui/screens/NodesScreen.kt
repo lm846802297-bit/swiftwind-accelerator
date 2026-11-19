@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.swiftwind.accelerator.data.EgressRegion
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.data.NodeSource
 import com.swiftwind.accelerator.vpn.NodeHealth
@@ -477,6 +478,8 @@ private fun NodeRow(
     onDelete: () -> Unit
 ) {
     val expired = checkedAt != null && now - checkedAt > NODE_HEALTH_TTL_MS
+    val regionFresh = checkedAt != null && !expired
+    val regionLabel = EgressRegion.label(node, regionFresh, checkedAt != null)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -510,6 +513,18 @@ private fun NodeRow(
                     color = TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    regionLabel,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    color = if (node.regionCode != null && regionFresh) {
+                        Sky.copy(alpha = 0.92f)
+                    } else {
+                        TextSecondary.copy(alpha = 0.72f)
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
                 Text(
                     node.endpoint.ifBlank { "WireGuard 节点" },
