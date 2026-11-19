@@ -59,6 +59,9 @@ data class UiState(
     val busy: Boolean = false,
     val health: Map<String, NodeHealth> = emptyMap(),
     val healthCheckedAt: Map<String, Long> = emptyMap(),
+    // 只有真正完成过一次出口检测的“当前连接节点”才允许把地区显示成当前出口。
+    // 连接断开、系统撤销 VPN、切换中或检测失败时必须立刻失效，避免旧地区冒充当前。
+    val regionVerifiedId: String? = null,
     val quality: Map<String, NodeQuality> = emptyMap(),
     // 底层 Wi-Fi / 蜂窝网络是否仍有 Internet。VPN 隧道本身可以保持 UP，
     // 但没有底层网络时不能继续宣称“已连接 / 流量已受保护”。
@@ -137,12 +140,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         // 切换节点时旧隧道的流量/时长不属于新连接，先清空，
                         // 避免界面在“正在连接”阶段继续显示上一节点的统计。
                         regionJob?.cancel()
-                        _ui.update { it.copy(stats = TunnelStats()) }
+                        _ui.update {
+                            it.copy(
+                                stats = TunnelStats(),
+                                regionVerifiedId = null
+                            )
+                        }
                     }
                     is VpnState.Disconnecting -> Unit
                     else -> {
                         stopStatsPolling()
-                        _ui.update { it.copy(stats = TunnelStats()) }
+                        _ui.update {
+                            it.copy(
+                                stats = TunnelStats(),
+                                regionVerifiedId = null
+                            )
+                        }
                     }
                 }
             }
@@ -885,9 +898,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         networkReconnectJob = viewModelScope.launch reconnect@{
             val eventAt = networkChangeEventAt
             _ui.update { it.copy(reconnecting = true) }
+            Log.d("SwiftWindSwitch", "network reconnect scheduled +1200ms")
             try {
                 // 网络切换后系统 VPN 的底层 socket 需要一点时间稳定，避免刚切就握手。
                 delay(1200L)
+                Log.d("SwiftWindSwitch", "network reconnect executing")
                 if (lastUserConnectionActionAt > eventAt) return@reconnect
                 if (TunnelController.state.value !is VpnState.Connected) return@reconnect
                 notify("网络已切换，正在重连…")
@@ -921,14 +936,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect() {
         if (_ui.value.busy || disconnectJob?.isActive == true) return
-        if (networkReconnectJob?.isActive == true) {
-            notify("正在恢复网络连接，请稍后再断开")
-            return
+        val activeReconnect = networkReconnectJob?.takeIf { it.isActive }
+        if (activeReconnect != null) {
+            // 用户主动断开优先于自动重连：先取消网络恢复任务，再走正常断开。
+            // 取消后的 TunnelController 会自己清理本次连接（NonCancellable），
+            // 下面的 disconnectJob 只等它离开 Connecting，不抢占它的清理流程。
+            networkReconnectJob = null
+            networkReconnectArmed = false
+            activeReconnect.cancel()
+            _ui.update { it.copy(reconnecting = false) }
+            Log.d("SwiftWindSwitch", "disconnect: cancelled active network reconnect")
         }
-        when (TunnelController.state.value) {
-            is VpnState.Connecting, is VpnState.Disconnecting -> return
-            else -> Unit
-        }
+        // 正在断开时不重复下发；Connecting 可能正是刚被取消的重连任务，
+        // 不直接拒绝，交给下面的 disconnectJob 等它回到可断开状态后再关闭隧道。
+        if (TunnelController.state.value is VpnState.Disconnecting) return
         networkReconnectJob?.cancel()
         networkReconnectJob = null
         networkReconnectArmed = false
@@ -938,6 +959,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _ui.update { it.copy(busy = true) }
         disconnectJob = viewModelScope.launch {
             try {
+                // 被取消的连接最多等 2 秒退出 Connecting；正常情况下
+                // TunnelController 的取消清理在几百毫秒内完成。
+                for (attempt in 0 until 20) {
+                    if (TunnelController.state.value !is VpnState.Connecting) break
+                    delay(100L)
+                }
                 runCatching { TunnelController.disconnect() }
                     .onFailure { notify(TunnelController.mapError(it)) }
             } finally {
@@ -1144,20 +1171,42 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val nodeId = nodeIdArg ?: return
         val generation = TunnelController.connectionGeneration()
         regionJob?.cancel()
+        // 新一轮检测开始前先作废旧国家/地区，检测失败时宁可显示“上次检测”，
+        // 也不能把上一轮的出口继续冒充当前出口。
+        _ui.update { it.copy(regionVerifiedId = null) }
         regionJob = viewModelScope.launch(Dispatchers.IO) {
-            val location = runCatching {
-                TunnelController.currentEgressLocation()
-            }.getOrNull() ?: return@launch
-            if (TunnelController.state.value !is VpnState.Connected ||
-                TunnelController.connectionGeneration() != generation
-            ) {
-                return@launch
+            // 刚建好隧道时路由/DNS 有时还没完全稳定，立即请求 trace 可能失败。
+            // 这里做 3 次带间隔的探测；只有拿到真实出口才把地区标记为“当前”。
+            val retryDelays = longArrayOf(500L, 700L, 1200L)
+            for ((attempt, retryDelay) in retryDelays.withIndex()) {
+                delay(retryDelay)
+                if (TunnelController.state.value !is VpnState.Connected ||
+                    TunnelController.connectionGeneration() != generation
+                ) {
+                    return@launch
+                }
+                val location = runCatching {
+                    TunnelController.currentEgressLocation()
+                }.getOrNull()
+                if (location != null) {
+                    updateNodeRegion(nodeId, location.countryCode, location.detail, markCurrent = true)
+                    return@launch
+                }
+                Log.d(
+                    "SwiftWindRegion",
+                    "node=$nodeId detect attempt ${attempt + 1}/${retryDelays.size} failed"
+                )
             }
-            updateNodeRegion(nodeId, location.countryCode, location.detail)
+            Log.d("SwiftWindRegion", "node=$nodeId detect gave up; keeping historical region")
         }
     }
 
-    private fun updateNodeRegion(nodeId: String, rawCountry: String?, rawDetail: String? = null) {
+    private fun updateNodeRegion(
+        nodeId: String,
+        rawCountry: String?,
+        rawDetail: String? = null,
+        markCurrent: Boolean = false
+    ) {
         val country = EgressRegion.normalizeCode(rawCountry) ?: return
         val detail = rawDetail?.trim()?.takeIf { it.isNotBlank() }
         var changed = false
@@ -1170,14 +1219,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 node
             }
         }
+        if (changed) NodeStore.saveNodes(updated)
+        _ui.update { state ->
+            state.copy(
+                nodes = if (changed) updated else state.nodes,
+                regionVerifiedId = if (markCurrent) nodeId else state.regionVerifiedId
+            )
+        }
         if (!changed) {
             // 同一出口再次检测时不会写库，但仍留一条校验日志，便于真机排查
             // “地区没有更新”到底是未执行检测，还是出口确实没变。
             Log.d("SwiftWindRegion", "node=$nodeId egress=$country${detail?.let { " / $it" } ?: ""} verified unchanged")
             return
         }
-        NodeStore.saveNodes(updated)
-        _ui.update { it.copy(nodes = updated) }
         Log.d("SwiftWindRegion", "node=$nodeId egress=$country${detail?.let { " / $it" } ?: ""}")
     }
 

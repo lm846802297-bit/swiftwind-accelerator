@@ -82,6 +82,10 @@ fun HomeScreen(
         NodeSelector(
             node = ui.selectedNode,
             healthCheckedAt = ui.selectedNode?.let { ui.healthCheckedAt[it.id] },
+            regionCurrent = ui.vpnState is VpnState.Connected &&
+                !ui.reconnecting &&
+                ui.regionVerifiedId != null &&
+                ui.regionVerifiedId == ui.selectedNode?.id,
             onClick = onOpenNodes
         )
         Spacer(Modifier.weight(0.9f))
@@ -200,7 +204,12 @@ private fun StatusPill(state: VpnState, online: Boolean, reconnecting: Boolean) 
 }
 
 @Composable
-private fun NodeSelector(node: Node?, healthCheckedAt: Long?, onClick: () -> Unit) {
+private fun NodeSelector(
+    node: Node?,
+    healthCheckedAt: Long?,
+    regionCurrent: Boolean,
+    onClick: () -> Unit
+) {
     GlassCard(modifier = Modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -221,14 +230,16 @@ private fun NodeSelector(node: Node?, healthCheckedAt: Long?, onClick: () -> Uni
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    val regionFresh = healthCheckedAt != null &&
+                    val regionFresh = regionCurrent &&
+                        healthCheckedAt != null &&
                         System.currentTimeMillis() - healthCheckedAt <= NODE_HEALTH_TTL_MS
                     Text(
-                        // 首页与节点列表保持同一口径：体检结果过期后不再把旧地区当成当前出口。
+                        // 只有当前连接且本轮出口检测成功后才显示“当前地区”；
+                        // 断开、系统撤销 VPN、切换中或检测失败时退回“上次检测”。
                         EgressRegion.summary(
                             node,
                             regionFresh = regionFresh,
-                            hasCheckedAt = healthCheckedAt != null
+                            hasCheckedAt = regionCurrent && healthCheckedAt != null
                         ),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
                         color = TextSecondary.copy(alpha = 0.6f),

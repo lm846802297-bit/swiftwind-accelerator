@@ -203,12 +203,17 @@ fun NodesScreen(
                     items(ui.nodes, key = { it.id }) { node ->
                         val checkedAt = ui.healthCheckedAt[node.id]
                         val health = effectiveHealth(ui.health[node.id], checkedAt, now)
+                        val regionCurrent = ui.vpnState is VpnState.Connected &&
+                            !ui.reconnecting &&
+                            ui.regionVerifiedId != null &&
+                            ui.regionVerifiedId == node.id
                         NodeRow(
                             node = node,
                             selected = node.id == ui.selectedId,
                             health = health,
                             checkedAt = checkedAt,
                             now = now,
+                            regionCurrent = regionCurrent,
                             enabled = nodeActionsEnabled,
                             onSelect = { onSelect(node.id) },
                             onDelete = { pendingDelete = node }
@@ -473,13 +478,18 @@ private fun NodeRow(
     health: NodeHealth,
     checkedAt: Long?,
     now: Long,
+    regionCurrent: Boolean,
     enabled: Boolean,
     onSelect: () -> Unit,
     onDelete: () -> Unit
 ) {
     val expired = checkedAt != null && now - checkedAt > NODE_HEALTH_TTL_MS
-    val regionFresh = checkedAt != null && !expired
-    val regionLabel = EgressRegion.summary(node, regionFresh, checkedAt != null)
+    val regionFresh = regionCurrent && checkedAt != null && !expired
+    val regionLabel = EgressRegion.summary(
+        node,
+        regionFresh = regionFresh,
+        hasCheckedAt = regionCurrent && checkedAt != null
+    )
     Surface(
         modifier = Modifier
             .fillMaxWidth()
