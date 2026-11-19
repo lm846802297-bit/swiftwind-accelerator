@@ -1,11 +1,11 @@
 package com.swiftwind.accelerator.data
 
 /**
- * 连接方式：
- * - SMART：连接前自动按体检健康度和质量分选线路；
- * - GLOBAL：使用用户当前选中的节点，全部应用流量都走 VPN。
+ * 连接方式（流量接管方式）：
+ * - SMART：接管外网流量。中国 IPv4 目标直连，非中国 IPv4 与全球 IPv6 走 VPN；
+ * - GLOBAL：接管全部流量。所有 IPv4 / IPv6 目标都走 VPN。
  *
- * 两种方式共用同一个 WireGuard 隧道和全局路由；区别在选线策略，而不是额外的分流规则。
+ * 两种方式使用同一个当前选中节点；区别在系统 VPN 的路由集合，而不是选线策略。
  */
 enum class ConnectionMode {
     SMART,

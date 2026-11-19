@@ -44,7 +44,7 @@ object NodeStore {
 
     /**
      * 默认使用全局连接，保持升级前“所有应用走 VPN、使用当前节点”的行为。
-     * 智能连接只改变连接前的选线策略，不改变系统 VPN 的全局路由。
+     * 智能连接只接管外网流量，不改变系统 VPN 的中国 IPv4 直连规则。
      */
     var connectionMode: ConnectionMode
         get() = runCatching {

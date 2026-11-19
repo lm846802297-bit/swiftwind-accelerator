@@ -17,7 +17,7 @@ import com.swiftwind.accelerator.data.NodeStore
 import com.swiftwind.accelerator.net.ConfigImporter
 import com.swiftwind.accelerator.net.SubscriptionFetcher
 import com.swiftwind.accelerator.net.WarpClient
-import com.swiftwind.accelerator.vpn.SmartNodePicker
+import com.swiftwind.accelerator.vpn.SplitRouteConfig
 import com.swiftwind.accelerator.vpn.TunnelController
 import com.swiftwind.accelerator.vpn.TunnelStats
 import com.swiftwind.accelerator.vpn.VpnState
@@ -72,8 +72,8 @@ data class UiState(
     // 还没完成，不能提前显示“已连接”。
     val reconnecting: Boolean = false,
     val probeProgress: ProbeProgress? = null,
-    // 智能连接 = 连接前自动选健康且质量分最高的线路；
-    // 全局连接 = 使用当前选中节点，全部应用流量走系统 VPN。
+    // 智能连接 = 国内 IPv4 直连，非中国 IPv4 与全球 IPv6 走 VPN；
+    // 全局连接 = 当前节点的全部 IPv4 / IPv6 流量都走系统 VPN。
     val connectionMode: ConnectionMode = ConnectionMode.GLOBAL
 ) {
     val selectedNode: Node?
@@ -546,7 +546,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         val targetHandshakeMs =
                             if (targetHealth == NodeHealth.FAIL) 800L else 1100L
                         TunnelController.connect(
-                            node.config,
+                            configFor(node),
                             handshakeTimeoutMs = targetHandshakeMs,
                             stabilityMs = 600L
                         )
@@ -670,22 +670,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             ConnectionMode.SMART -> {
                 notify(
                     if (connected) {
-                        "已切换为智能连接，下次连接会自动选择最优线路"
+                        "已切换为智能连接：国内直连，外网走 VPN；正在按新规则重连…"
                     } else {
-                        "已切换为智能连接，连接时会自动选择最优线路"
+                        "已切换为智能连接：国内流量直连，外网流量走 VPN"
                     }
                 )
             }
             ConnectionMode.GLOBAL -> {
                 notify(
                     if (connected) {
-                        "已切换为全局连接，当前节点和全部应用继续使用 VPN"
+                        "已切换为全局连接：全部应用流量走 VPN；正在按新规则重连…"
                     } else {
-                        "已切换为全局连接，将使用当前节点，全部应用流量走 VPN"
+                        "已切换为全局连接：全部应用流量走 VPN"
                     }
                 )
             }
         }
+        // 已连接时直接重建隧道，让路由规则立即生效；未连接时只保存选择，
+        // 等用户下一次点连接再应用。
+        if (connected && !_ui.value.busy) connect()
     }
 
     fun connect() {
@@ -712,26 +715,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // 智能连接只在“发起新连接”时选线；已经连接时用户点主按钮是断开，
-        // 不会因为切换模式而偷偷改走另一条节点。
-        val node = if (_ui.value.connectionMode == ConnectionMode.SMART) {
-            val now = System.currentTimeMillis()
-            val health = _ui.value.nodes.associate { it.id to effectiveHealthFor(it.id, now) }
-            val picked = SmartNodePicker.pick(
-                nodes = _ui.value.nodes,
-                health = health,
-                quality = _ui.value.quality,
-                preferred = current
-            )
-            if (picked != null && picked.id != _ui.value.selectedId) {
-                NodeStore.selectedId = picked.id
-                _ui.update { it.copy(selectedId = picked.id) }
-                notify("智能连接：已选择“${picked.name}”")
-            }
-            picked ?: current
-        } else {
-            current
-        }
+        // 智能/全局只决定路由接管方式，不改变用户选中的节点。
+        val node = current
         if (node == null) {
             notify("请先添加一个节点")
             return
@@ -760,6 +745,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         connectJob = job
     }
 
+    private fun configFor(node: Node): String =
+        SplitRouteConfig.forMode(getApplication(), node.config, _ui.value.connectionMode)
+
     /**
      * 连接失败时按健康度/质量分尝试少量 WARP 备用线路。
      * 只对 WARP 免费节点自动换线；手动导入或订阅节点保持用户选择，避免偷偷改线路。
@@ -770,7 +758,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         while (true) {
             attempted += current.id
             try {
-                TunnelController.connect(current.config)
+                TunnelController.connect(configFor(current))
                 if (current.id != start.id) {
                     NodeStore.selectedId = current.id
                     _ui.update { it.copy(selectedId = current.id) }
@@ -826,7 +814,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         for (candidate in candidates) {
             try {
                 TunnelController.connect(
-                    candidate.config,
+                    configFor(candidate),
                     verifyData = true,
                     handshakeTimeoutMs = 1000L,
                     stabilityMs = 600L
@@ -1191,7 +1179,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             for (candidate in candidates) {
                 try {
                     TunnelController.connect(
-                        candidate.config,
+                        configFor(candidate),
                         handshakeTimeoutMs = 1000L,
                         stabilityMs = 600L
                     )

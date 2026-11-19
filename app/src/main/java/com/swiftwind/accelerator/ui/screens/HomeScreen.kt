@@ -284,7 +284,7 @@ private fun ConnectionModeRow(
             enabled = enabled,
             icon = Icons.Rounded.AutoAwesome,
             title = "智能连接",
-            subtitle = "自动选最优",
+            subtitle = "国内直连·外网代理",
             onClick = { onSelect(ConnectionMode.SMART) }
         )
         ConnectionModeCard(

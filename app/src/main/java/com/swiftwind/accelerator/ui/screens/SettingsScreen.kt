@@ -86,8 +86,8 @@ fun SettingsScreen(
                     icon = Icons.Rounded.AutoAwesome,
                     title = "连接方式",
                     subtitle = when (ui.connectionMode) {
-                        ConnectionMode.SMART -> "连接前自动选择最优线路"
-                        ConnectionMode.GLOBAL -> "使用当前节点，全部应用流量走 VPN"
+                        ConnectionMode.SMART -> "国内直连，外网流量走 VPN"
+                        ConnectionMode.GLOBAL -> "全部应用流量走 VPN"
                     },
                     value = when (ui.connectionMode) {
                         ConnectionMode.SMART -> "智能连接"
