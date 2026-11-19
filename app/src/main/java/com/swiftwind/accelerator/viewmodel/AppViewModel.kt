@@ -117,12 +117,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val savedSelected = NodeStore.selectedId
         val selected = nodes.firstOrNull { it.id == savedSelected }?.id ?: nodes.firstOrNull()?.id
         if (selected != null && savedSelected != selected) NodeStore.selectedId = selected
+        val storedHealth = NodeStore.loadHealth()
+        val nodeIds = nodes.mapTo(HashSet()) { it.id }
 
         _ui.value = UiState(
             nodes = nodes,
             selectedId = selected,
             vpnState = TunnelController.state.value,
-            networkAvailable = hasUnderlyingInternet()
+            networkAvailable = hasUnderlyingInternet(),
+            health = storedHealth.health.filterKeys { it in nodeIds },
+            healthCheckedAt = storedHealth.checkedAt.filterKeys { it in nodeIds }
         )
 
         viewModelScope.launch {
@@ -387,6 +391,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     state.copy(busy = false, probeProgress = null, health = clearedHealth)
                 }
+                persistHealth()
                 if (cancelLatency >= 0L) {
                     Log.d("SwiftWindProbe", "probe ui cleared +${cancelLatency}ms")
                 }
@@ -642,6 +647,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         quality = it.quality - id
                     )
                 }
+                persistHealth()
                 notify("节点已删除")
             } finally {
                 _ui.update { it.copy(busy = false) }
@@ -1247,6 +1253,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 healthCheckedAt = state.healthCheckedAt + (id to System.currentTimeMillis())
             )
         }
+        persistHealth()
     }
 
     private fun markHealthy(id: String) {
@@ -1256,6 +1263,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 healthCheckedAt = state.healthCheckedAt + (id to System.currentTimeMillis())
             )
         }
+        persistHealth()
+    }
+
+    private fun persistHealth() {
+        val state = _ui.value
+        NodeStore.saveHealth(state.health, state.healthCheckedAt)
     }
 
     private fun notify(message: String) {
