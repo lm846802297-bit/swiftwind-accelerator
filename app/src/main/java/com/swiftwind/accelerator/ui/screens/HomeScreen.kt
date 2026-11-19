@@ -182,6 +182,8 @@ private fun StatusPill(state: VpnState, online: Boolean, reconnecting: Boolean) 
                 offline -> Rose
                 rebooting -> Sky
                 connected -> Mint
+                state is VpnState.Connecting || state is VpnState.Disconnecting -> Sky
+                state is VpnState.Error -> Danger
                 else -> TextSecondary
             },
             modifier = Modifier.padding(start = 6.dp)

@@ -55,6 +55,9 @@ object TunnelController {
     /** 串行化连接/断开/体检的入口，避免体检 finally 拆掉刚建立的连接。 */
     private val operationGate = Any()
     private var probing = false
+    // 连接代际：连接协程被取消（比如 Activity 关闭导致 viewModelScope 取消）时，
+    // 只允许清理属于本次连接的状态，避免误伤随后启动的新连接。
+    private var connectionAttempt = 0L
 
     private val tunnel = object : Tunnel {
         override fun getName(): String = TUNNEL_NAME
@@ -87,8 +90,15 @@ object TunnelController {
         }
     }
 
-    /** App 进程重启后，检查系统里是否已有本 App 的隧道在运行。 */
-    fun syncState() {
+    /**
+     * App 进程重启后，检查系统里是否已有本 App 的隧道在运行。
+     *
+     * 只有 ViewModel 初始化时才允许把“Idle + 隧道仍在跑”接成 Connected，
+     * 并且随后必须走 [verifyAdoptedConnection] 数据面复核。统计轮询和保活
+     * 服务里的常规同步不允许做这种接管，避免体检清理残留或服务收尾期间
+     * 把一个没有验证过的隧道误显示成已连接。
+     */
+    fun syncState(adoptRunningTunnel: Boolean = false) {
         if (!::backend.isInitialized) return
         synchronized(operationGate) {
             if (probing) return
@@ -99,7 +109,7 @@ object TunnelController {
                         startedAt = 0L
                         updateState(VpnState.Idle)
                     }
-                    _state.value is VpnState.Idle && running -> {
+                    _state.value is VpnState.Idle && running && adoptRunningTunnel -> {
                         startedAt = SystemClock.elapsedRealtime()
                         updateState(VpnState.Connected)
                     }
@@ -116,6 +126,49 @@ object TunnelController {
         runCatching { VpnKeepAliveService.start(appContext) }
     }
 
+    /**
+     * App 进程重启后 syncState 只能看到“系统里还有本应用的隧道”，
+     * 无法证明这条隧道仍能传输数据。这里做一次带重试的数据面复核；
+     * 若隧道已失效则主动拆掉并回到 Error，避免界面长期显示假连接。
+     *
+     * 复核前后用 startedAt 作为连接代际标记：用户在复核期间断开/切节点时，
+     * 不会把新连接误判成失效隧道。
+     */
+    suspend fun verifyAdoptedConnection(): Boolean = withContext(Dispatchers.IO) {
+        if (_state.value !is VpnState.Connected) return@withContext true
+        val generation = startedAt
+        var dataOk = false
+        repeat(2) {
+            if (!dataOk) {
+                dataOk = verifyTraffic()
+                if (!dataOk) delay(600L)
+            }
+        }
+        var tearDown = false
+        synchronized(operationGate) {
+            // 复核期间用户已经断开或切换到了另一条隧道，当前状态不再归本次复核处理。
+            if (_state.value !is VpnState.Connected || startedAt != generation) {
+                return@withContext true
+            }
+            if (!dataOk) {
+                runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                tearDown = true
+            }
+        }
+        if (tearDown) {
+            // awaitRunning 不能在 operationGate 的临界区内挂起；
+            // 拆隧道后再短暂等待系统回收，然后重新核对连接代际，避免误伤新连接。
+            runCatching { awaitRunning(false, 900L) }
+            synchronized(operationGate) {
+                if (_state.value is VpnState.Connected && startedAt == generation) {
+                    startedAt = 0L
+                    updateState(VpnState.Error("现有隧道无法传输数据，请重新连接"))
+                }
+            }
+        }
+        dataOk
+    }
+
     suspend fun connect(
         configText: String,
         verifyData: Boolean = true,
@@ -125,14 +178,16 @@ object TunnelController {
         // 先把配置解析完再进入 Connecting：配置无效时保持原状态，
         // 不能因为旧隧道还在运行就把一个根本没用上的节点显示成“已连接”。
         val config: Config = Config.parse(BufferedReader(StringReader(configText)))
-        synchronized(operationGate) {
+        val attemptId = synchronized(operationGate) {
             if (probing) throw IllegalStateException("正在体检节点，请稍后再连接")
             when (_state.value) {
                 is VpnState.Connecting,
                 is VpnState.Disconnecting -> throw IllegalStateException("正在切换连接，请稍后再试")
                 else -> Unit
             }
+            connectionAttempt += 1L
             updateState(VpnState.Connecting)
+            connectionAttempt
         }
         try {
             val connectStartedAt = SystemClock.elapsedRealtime()
@@ -178,7 +233,22 @@ object TunnelController {
             updateState(VpnState.Connected)
             Log.d("SwiftWindSwitch", "connect done +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
         } catch (t: Throwable) {
-            if (t is CancellationException) throw t
+            if (t is CancellationException) {
+                // Activity 关闭会取消 viewModelScope，连接协程可能停在 Connecting。
+                // 不清理的话下次打开会卡在“正在连接”，连接/断开按钮都被拒绝。
+                withContext(NonCancellable) {
+                    synchronized(operationGate) {
+                        if (connectionAttempt == attemptId &&
+                            _state.value is VpnState.Connecting
+                        ) {
+                            runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                            startedAt = 0L
+                            updateState(VpnState.Idle)
+                        }
+                    }
+                }
+                throw t
+            }
             if (_state.value is VpnState.Error) throw t
             // GoBackend 在切换配置失败时会尝试恢复旧隧道。这里不能只看“有隧道在跑”
             // 就直接报已连接：新建的隧道也可能残留在运行但根本不通。
@@ -330,9 +400,21 @@ object TunnelController {
                 // 取消体检时也要等隧道真正停止，再把 probing 放开；
                 // 否则紧接着点“连接”可能和还在回收的旧隧道抢状态。
                 withContext(NonCancellable) {
-                    runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
-                    runCatching { awaitRunning(false, 700L) }
-                    synchronized(operationGate) { probing = false }
+                    var stopped = false
+                    for (attempt in 0..1) {
+                        runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                        val waitMs = if (attempt == 0) 700L else 900L
+                        stopped = runCatching { awaitRunning(false, waitMs) }.getOrDefault(false)
+                        if (stopped) break
+                    }
+                    synchronized(operationGate) {
+                        probing = false
+                        // DOWN 调用返回不等于系统已经释放 tun；仍在运行说明清理失败。
+                        // 这种残留隧道不能静默留在后台，否则用户看到“未连接”但流量仍在被劫持。
+                        if (!stopped && isRunning()) {
+                            updateState(VpnState.Error("体检结束后 VPN 隧道未能释放，请重新连接"))
+                        }
+                    }
                 }
                 Log.d(
                     "SwiftWindProbe",

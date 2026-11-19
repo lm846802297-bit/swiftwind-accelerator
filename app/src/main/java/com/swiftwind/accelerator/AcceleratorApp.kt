@@ -7,6 +7,7 @@ import com.swiftwind.accelerator.vpn.TunnelController
 class AcceleratorApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        CrashLogger.install(this)
         NodeStore.init(this)
         TunnelController.init(this)
     }

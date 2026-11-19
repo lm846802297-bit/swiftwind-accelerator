@@ -20,6 +20,8 @@ fun effectiveHealth(
     checkedAt: Long?,
     now: Long = System.currentTimeMillis()
 ): NodeHealth {
+    // “检测中”是进行中的临时状态，不应因为还没有体检时间戳就被当成未知。
+    if (health == NodeHealth.CHECKING) return NodeHealth.CHECKING
     if (checkedAt == null) return NodeHealth.UNKNOWN
     if (now - checkedAt > NODE_HEALTH_TTL_MS) return NodeHealth.UNKNOWN
     return health ?: NodeHealth.UNKNOWN

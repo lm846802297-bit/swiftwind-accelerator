@@ -12,7 +12,16 @@ import java.util.Locale
  * 路径：Android/data/com.swiftwind.accelerator/files/crash-logs/
  */
 object CrashLogger {
+    @Volatile
+    private var installed = false
+
+    /**
+     * 只安装一次全局异常处理器。MainActivity 每次重建都会走到这里，
+     * 如果反复包装系统默认 handler，会形成越来越长的调用链。
+     */
+    @Synchronized
     fun install(context: Context) {
+        if (installed) return
         val appContext = context.applicationContext
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
@@ -33,5 +42,6 @@ object CrashLogger {
                 android.os.Process.killProcess(android.os.Process.myPid())
             }
         }
+        installed = true
     }
 }

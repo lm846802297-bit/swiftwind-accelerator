@@ -40,6 +40,14 @@ class NodeHealthTest {
     }
 
     @Test
+    fun `checking state is visible while probe is running`() {
+        assertEquals(
+            NodeHealth.CHECKING,
+            effectiveHealth(NodeHealth.CHECKING, null, now)
+        )
+    }
+
+    @Test
     fun `result remains valid exactly at ttl boundary`() {
         assertEquals(
             NodeHealth.OK,

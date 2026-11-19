@@ -122,7 +122,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         // 避免自动换线时把失败的原节点误标成“可用”。
                         startStatsPolling()
                     }
-                    is VpnState.Connecting, is VpnState.Disconnecting -> Unit
+                    is VpnState.Connecting -> {
+                        // 切换节点时旧隧道的流量/时长不属于新连接，先清空，
+                        // 避免界面在“正在连接”阶段继续显示上一节点的统计。
+                        _ui.update { it.copy(stats = TunnelStats()) }
+                    }
+                    is VpnState.Disconnecting -> Unit
                     else -> {
                         stopStatsPolling()
                         _ui.update { it.copy(stats = TunnelStats()) }
@@ -131,10 +136,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        TunnelController.syncState()
+        TunnelController.syncState(adoptRunningTunnel = true)
         if (TunnelController.state.value is VpnState.Connected) {
             _ui.value.selectedId?.let { markHealthy(it) }
             startStatsPolling()
+            // syncState 只能确认系统里还留着本应用的隧道，不能证明数据面仍然可用。
+            // 进程重启后补一次后台复核，避免残留隧道被长期显示成“已连接”。
+            viewModelScope.launch {
+                delay(1500L)
+                Log.d("SwiftWindHealth", "verify adopted connection begin")
+                val ok = try {
+                    TunnelController.verifyAdoptedConnection()
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    Log.w("SwiftWindHealth", "adopted tunnel verify failed", t)
+                    true
+                }
+                Log.d("SwiftWindHealth", "verify adopted connection ok=$ok")
+                if (!ok) {
+                    _ui.value.selectedId?.let { markUnhealthy(it) }
+                    notify("现有 VPN 隧道无法传输数据，请重新连接")
+                }
+            }
         }
         startNetworkMonitoring()
     }
@@ -183,6 +206,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 notify("已更新 ${fresh.size} 条 Cloudflare WARP 免费线路，建议点「一键体检」按质量排序")
             } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 notify("获取免费节点失败：${TunnelController.mapError(t)}")
             } finally {
                 _ui.update { it.copy(busy = false) }
@@ -391,6 +415,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val suffix = if (invalid > 0) "，${invalid} 个配置无法解析" else ""
                 notify("已导入 ${added} 个节点$suffix")
             } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 notify("导入失败：${t.message ?: "配置内容无效"}")
             } finally {
                 _ui.update { it.copy(busy = false) }
@@ -399,7 +424,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addSubscription(url: String) {
-        if (_ui.value.busy) return
+        if (_ui.value.busy) {
+            notify("正在体检或刷新节点，请稍后再添加订阅")
+            return
+        }
         if (url.isBlank()) {
             notify("请先填写订阅链接")
             return
@@ -429,6 +457,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val added = addNodes(nodes, selectFirst = _ui.value.selectedId == null)
                 notify("订阅已更新，新增 ${added} 个节点")
             } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 notify("订阅拉取失败：${TunnelController.mapError(t)}")
             } finally {
                 _ui.update { it.copy(busy = false) }
@@ -720,6 +749,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val caps = manager.getNetworkCapabilities(network)
                 caps != null &&
                     caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
                     !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
             }
         }.getOrDefault(false)
@@ -735,8 +765,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             // 避免 networkReconnectArmed / networkReconnectJob / 时间戳跨线程读写。
             override fun onAvailable(network: Network) {
                 viewModelScope.launch {
-                    val caps = manager.getNetworkCapabilities(network)
-                    if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) return@launch
+                    // onAvailable 可能早于 onCapabilitiesChanged。此时无法判断
+                    // 这个 Network 是不是 VPN，也不能假设它有 Internet；先不登记，
+                    // 等带能力信息的回调到齐后再决定，避免把 VPN 自身当成底层网络。
+                    val caps = manager.getNetworkCapabilities(network) ?: return@launch
+                    if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                        !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    ) {
+                        return@launch
+                    }
+                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@launch
                     val added = synchronized(underlyingNetworks) { underlyingNetworks.add(network) }
                     if (added) {
                         networkChangeEventAt = SystemClock.elapsedRealtime()
@@ -751,7 +789,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 viewModelScope.launch {
                     if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@launch
-                    if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                        !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    ) {
                         // 网络没有真正 Internet 能力时，不能继续把它留在“可用底层网络”集合里，
                         // 否则后续 isNotEmpty() 判断会把一次断网误当成仍可重连。
                         val removed = synchronized(underlyingNetworks) { underlyingNetworks.remove(network) }

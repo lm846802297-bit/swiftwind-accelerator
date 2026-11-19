@@ -46,7 +46,7 @@ data class Node(
                 for (i in 0 until array.length()) {
                     runCatching { add(fromJson(array.getJSONObject(i))) }
                 }
-            }
+            }.distinctBy { it.id }
         }
     }
 }
