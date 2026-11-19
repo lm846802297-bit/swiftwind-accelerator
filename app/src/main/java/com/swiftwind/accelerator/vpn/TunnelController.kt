@@ -147,9 +147,8 @@ object TunnelController {
                 throw error
             }
             // 握手成功也不代表能上网：再做一次极小的 HTTPS 请求确认数据面。
-            // 这同时让“连接成功”后的健康标签有真实依据。
-            // 回滚原节点时跳过这一步：它刚刚才验证过，跳过可以把失败切换的恢复时间
-            // 从约 8 秒压到约 5 秒，避免用户为一次误点等太久。
+            // 这同时让“连接成功”后的健康标签有真实依据；回滚原节点也保留这一步，
+            // 避免“只握手成功、实际没网”的假连接。
             val verified = if (verifyData) verifyTraffic() else true
             Log.d("SwiftWindSwitch", "connect verify=$verified +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
             if (!verified) {

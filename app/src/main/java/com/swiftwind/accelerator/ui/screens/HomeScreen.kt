@@ -80,7 +80,9 @@ fun HomeScreen(
         Spacer(Modifier.weight(0.9f))
         ConnectOrb(
             state = ui.vpnState,
-            enabled = !ui.busy && ui.vpnState !is VpnState.Disconnecting,
+            enabled = !ui.busy &&
+                ui.vpnState !is VpnState.Connecting &&
+                ui.vpnState !is VpnState.Disconnecting,
             onClick = onToggle
         )
         Spacer(Modifier.height(16.dp))

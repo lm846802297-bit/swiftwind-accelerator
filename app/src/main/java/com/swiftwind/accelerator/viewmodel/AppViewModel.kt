@@ -73,6 +73,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private var statsJob: Job? = null
     private var probeJob: Job? = null
+    // connect() 在真正进入 Connecting 状态前有一小段异步窗口；
+    // 用 Job 做同步闸门，避免快速双击时两条连接协程互相覆盖状态。
+    private var connectJob: Job? = null
 
     private val connectivityManager = application.applicationContext
         .getSystemService(ConnectivityManager::class.java)
@@ -511,16 +514,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             else -> Unit
         }
-        viewModelScope.launch {
-            networkReconnectJob?.cancel()
-            networkReconnectJob = null
-            val result = connectWithFailover(node, allowWarpFailover = true)
-            if (result.isFailure) {
-                val error = result.exceptionOrNull()
-                    ?: IllegalStateException("连接失败，请重试")
-                notify(TunnelController.mapError(error))
+        if (connectJob?.isActive == true) return
+        networkReconnectJob?.cancel()
+        networkReconnectJob = null
+        val job = viewModelScope.launch {
+            try {
+                val result = connectWithFailover(node, allowWarpFailover = true)
+                if (result.isFailure) {
+                    val error = result.exceptionOrNull()
+                        ?: IllegalStateException("连接失败，请重试")
+                    notify(TunnelController.mapError(error))
+                }
+            } finally {
+                if (connectJob === coroutineContext[Job]) connectJob = null
             }
         }
+        connectJob = job
     }
 
     /**
@@ -577,7 +586,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * 切换失败后的恢复顺序：原节点优先，其次按健康度/质量分尝试少量 WARP 备用线。
-     * 恢复阶段不再做完整 HTTP 验证，避免用户为一次误点等待过久；失败则继续下一个。
+     * 恢复阶段仍要做数据面验证：只握手成功但传不了数据时，不能把界面伪装成“已连接”。
+     * 1.5 秒握手超时 + 一次小请求，健康节点通常能在几百毫秒内恢复。
      */
     private suspend fun restoreAfterSwitchFailure(previous: Node, failedTargetId: String): Node? {
         val attempted = mutableSetOf(previous.id, failedTargetId)
@@ -589,7 +599,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 TunnelController.connect(
                     candidate.config,
-                    verifyData = false,
+                    verifyData = true,
                     handshakeTimeoutMs = 1500L
                 )
                 return candidate

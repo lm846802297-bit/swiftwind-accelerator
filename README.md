@@ -30,6 +30,18 @@
 
 APK 输出：`app/build/outputs/apk/debug/app-debug.apk`
 
+### Windows 中文路径
+
+项目路径包含中文时，Windows 下的 Kotlin 增量缓存和单测类路径可能把 `X:\` 与中文真实路径混用，出现 `ClassNotFoundException`。构建和跑单测前先建立 ASCII 盘符映射，并从映射盘运行 Gradle：
+
+```cmd
+subst X: C:\Users\84680\Desktop\加速器开发
+cd /d X:\
+gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
+```
+
+如果已经用中文路径构建过，先执行 `gradle :app:clean` 再重新跑，避免旧缓存继续指向已失效的盘符。
+
 ### 发布构建
 
 1. 将正式 keystore 放到本地，创建 `keystore.properties`（不要提交到仓库）：
