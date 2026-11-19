@@ -118,6 +118,63 @@ object TunnelController {
         }
     }
 
+    /** 当前已连接隧道的代际；连接成功时更新，用于丢弃过期的异步复核结果。 */
+    fun connectionGeneration(): Long = startedAt
+
+    /**
+     * 连接中的周期性数据面探测。连续两次 HTTPS 请求都失败才返回 false；
+     * 只读验证，不在这里拆隧道，由 ViewModel 结合用户操作和连接代际决定后续动作。
+     */
+    suspend fun verifyLiveConnection(): Boolean = withContext(Dispatchers.IO) {
+        if (_state.value !is VpnState.Connected) return@withContext false
+        // 隧道被系统回收后，普通 HTTPS 可能走底层直连而“成功”，
+        // 不能把这种直连结果当成 VPN 数据面可用。
+        if (!isRunning()) return@withContext false
+        val generation = startedAt
+        var dataOk = verifyTraffic()
+        if (!dataOk) {
+            delay(900L)
+            if (_state.value is VpnState.Connected &&
+                startedAt == generation &&
+                isRunning()
+            ) {
+                dataOk = verifyTraffic()
+            }
+        }
+        if (!isRunning()) dataOk = false
+        dataOk
+    }
+
+    /**
+     * 心跳确认节点失效后主动拆掉隧道并进入 Error。
+     * generation 用于避免用户在复核期间已经切到新连接时，误拆新隧道。
+     */
+    suspend fun failCurrentConnection(message: String, generation: Long? = null): Boolean =
+        withContext(Dispatchers.IO) {
+            var shouldFail = false
+            synchronized(operationGate) {
+                if (_state.value is VpnState.Connected &&
+                    (generation == null || startedAt == generation)
+                ) {
+                    runCatching { backend.setState(tunnel, Tunnel.State.DOWN, null) }
+                    shouldFail = true
+                }
+            }
+            if (!shouldFail) return@withContext false
+
+            // 不在 operationGate 的临界区里挂起；拆隧道后短暂等待系统释放。
+            runCatching { awaitRunning(false, 900L) }
+            synchronized(operationGate) {
+                if (_state.value is VpnState.Connected &&
+                    (generation == null || startedAt == generation)
+                ) {
+                    startedAt = 0L
+                    updateState(VpnState.Error(message))
+                }
+            }
+            true
+        }
+
     /** App 进程仍存活时，若系统把前台保活服务回收了，补拉起一次。 */
     fun ensureKeepAlive() {
         if (!::appContext.isInitialized) return
@@ -140,10 +197,11 @@ object TunnelController {
         var dataOk = false
         repeat(2) {
             if (!dataOk) {
-                dataOk = verifyTraffic()
+                dataOk = isRunning() && verifyTraffic()
                 if (!dataOk) delay(600L)
             }
         }
+        if (!isRunning()) dataOk = false
         var tearDown = false
         synchronized(operationGate) {
             // 复核期间用户已经断开或切换到了另一条隧道，当前状态不再归本次复核处理。

@@ -38,6 +38,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val MAX_FAILOVER_CANDIDATES = 2
+private const val HEARTBEAT_TICK_MS = 5_000L
+private const val HEARTBEAT_INTERVAL_MS = 30_000L
+private const val HEARTBEAT_SETTLE_MS = 6_000L
 
 data class ProbeProgress(
     val done: Int = 0,
@@ -79,8 +82,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     private var statsJob: Job? = null
+    private var heartbeatJob: Job? = null
     private var probeJob: Job? = null
     private var probeCancelRequestedAt = 0L
+    private var lastHeartbeatAt = 0L
+    private var lastHeartbeatGeneration = 0L
+    private var heartbeatFailoverInProgress = false
     // connect() 在真正进入 Connecting 状态前有一小段异步窗口；
     // 用 Job 做同步闸门，避免快速双击时两条连接协程互相覆盖状态。
     private var connectJob: Job? = null
@@ -160,6 +167,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         startNetworkMonitoring()
+        startConnectionHeartbeat()
     }
 
     fun fetchWarpNode() {
@@ -498,14 +506,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     Log.d("SwiftWindSwitch", "switch start target=${node.name} from=${previous?.name}")
                     try {
                         // 已知不可用的线路用更短的握手窗口，失败时更快回到原节点；
-                        // 未测/可用线路保留 1.2 秒，避免误杀刚恢复的节点。
+                        // 未测/可用线路保留 1.1 秒，避免误杀刚恢复的节点。
                         val targetHealth = effectiveHealthFor(node.id)
                         val targetHandshakeMs =
-                            if (targetHealth == NodeHealth.FAIL) 1000L else 1200L
+                            if (targetHealth == NodeHealth.FAIL) 800L else 1100L
                         TunnelController.connect(
                             node.config,
                             handshakeTimeoutMs = targetHandshakeMs,
-                            stabilityMs = 700L
+                            stabilityMs = 600L
                         )
                         NodeStore.selectedId = id
                         _ui.update { it.copy(selectedId = id) }
@@ -715,7 +723,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 切换失败后的恢复顺序：原节点优先，其次按健康度/质量分尝试少量 WARP 备用线。
      * 恢复阶段仍要做数据面验证：只握手成功但传不了数据时，不能把界面伪装成“已连接”。
-     * 1.2 秒握手超时 + 0.7 秒稳定窗口 + 一次小请求，健康节点通常能在一秒多恢复。
+     * 1.0 秒握手超时 + 0.6 秒稳定窗口 + 一次小请求，健康节点通常能在一秒多恢复。
      */
     private suspend fun restoreAfterSwitchFailure(previous: Node, failedTargetId: String): Node? {
         val attempted = mutableSetOf(previous.id, failedTargetId)
@@ -728,8 +736,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 TunnelController.connect(
                     candidate.config,
                     verifyData = true,
-                    handshakeTimeoutMs = 1200L,
-                    stabilityMs = 700L
+                    handshakeTimeoutMs = 1000L,
+                    stabilityMs = 600L
                 )
                 return candidate
             } catch (t: Throwable) {
@@ -882,6 +890,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
         networkReconnectJob?.cancel()
         networkCallback?.let { callback ->
             runCatching { connectivityManager?.unregisterNetworkCallback(callback) }
@@ -956,6 +966,154 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopStatsPolling() {
         statsJob?.cancel()
         statsJob = null
+    }
+
+    /**
+     * 连接后的数据面心跳。WireGuard 握手成功、隧道保持 UP 都不代表还能上网，
+     * 因此每隔 30 秒通过隧道做一次极小 HTTPS 请求；连续失败才判定节点失效，
+     * 避免一次瞬时抖动就切走线路。
+     *
+     * 心跳循环常驻，不随单次连接启停：连接代际、底层网络和 busy 状态都在
+     * 每轮重新判断，避免“心跳协程正在自动换线时被状态收集器取消”。
+     */
+    private fun startConnectionHeartbeat() {
+        if (heartbeatJob?.isActive == true) return
+        heartbeatJob = viewModelScope.launch {
+            while (isActive) {
+                delay(HEARTBEAT_TICK_MS)
+                val state = TunnelController.state.value
+                if (state !is VpnState.Connected) {
+                    lastHeartbeatAt = 0L
+                    lastHeartbeatGeneration = 0L
+                    continue
+                }
+                if (_ui.value.busy ||
+                    _ui.value.reconnecting ||
+                    networkReconnectJob?.isActive == true ||
+                    !_ui.value.networkAvailable
+                ) {
+                    continue
+                }
+                val generation = TunnelController.connectionGeneration()
+                val now = SystemClock.elapsedRealtime()
+                if (generation == lastHeartbeatGeneration &&
+                    now - lastHeartbeatAt < HEARTBEAT_INTERVAL_MS
+                ) {
+                    continue
+                }
+                // 连接刚建立时先让系统 VPN / 数据面稳定，避免把启动阶段的
+                // 几百毫秒波动误判成节点失效。
+                if (now - generation < HEARTBEAT_SETTLE_MS) continue
+
+                lastHeartbeatGeneration = generation
+                lastHeartbeatAt = now
+                val dataOk = try {
+                    TunnelController.verifyLiveConnection()
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    Log.w("SwiftWindHealth", "live heartbeat verify failed", t)
+                    false
+                }
+                if (TunnelController.state.value !is VpnState.Connected ||
+                    TunnelController.connectionGeneration() != generation
+                ) {
+                    // 复核期间用户断开或切到了别的线路，本次结果作废。
+                    continue
+                }
+                if (!_ui.value.networkAvailable) continue
+                if (dataOk) {
+                    _ui.value.selectedId?.let { markHealthy(it) }
+                    Log.d("SwiftWindHealth", "live heartbeat ok generation=$generation")
+                } else {
+                    Log.d("SwiftWindHealth", "live heartbeat failed generation=$generation")
+                    handleHeartbeatFailure(generation)
+                }
+            }
+        }
+    }
+
+    private suspend fun handleHeartbeatFailure(generation: Long) {
+        if (heartbeatFailoverInProgress) return
+        if (_ui.value.busy ||
+            _ui.value.reconnecting ||
+            networkReconnectJob?.isActive == true ||
+            !_ui.value.networkAvailable
+        ) {
+            return
+        }
+        if (TunnelController.state.value !is VpnState.Connected ||
+            TunnelController.connectionGeneration() != generation
+        ) {
+            return
+        }
+        val current = _ui.value.selectedNode ?: return
+        heartbeatFailoverInProgress = true
+        _ui.update { it.copy(busy = true) }
+        try {
+            markUnhealthy(current.id)
+            Log.d(
+                "SwiftWindHealth",
+                "heartbeat node failed: ${current.name} ${current.endpoint}"
+            )
+            // 手动导入 / 订阅节点是用户明确选择的线路，不自动替换；
+            // 只把真实状态报出来，避免偷偷改走别的节点。
+            if (current.source != NodeSource.WARP) {
+                TunnelController.failCurrentConnection(
+                    "当前节点无法传输数据，请切换节点或重新连接",
+                    generation
+                )
+                notify("当前节点无法传输数据，请切换节点或重新连接")
+                return
+            }
+
+            val candidates = failoverCandidates(current, setOf(current.id))
+            if (candidates.isEmpty()) {
+                TunnelController.failCurrentConnection(
+                    "当前节点无法传输数据，请切换节点或重新连接",
+                    generation
+                )
+                notify("当前节点无法传输数据，请切换节点或重新连接")
+                return
+            }
+
+            notify("当前节点心跳失败，正在尝试备用线路…")
+            for (candidate in candidates) {
+                try {
+                    TunnelController.connect(
+                        candidate.config,
+                        handshakeTimeoutMs = 1000L,
+                        stabilityMs = 600L
+                    )
+                    NodeStore.selectedId = candidate.id
+                    _ui.update { it.copy(selectedId = candidate.id) }
+                    markHealthy(candidate.id)
+                    Log.d(
+                        "SwiftWindHealth",
+                        "heartbeat failover success -> ${candidate.name}"
+                    )
+                    notify("节点心跳失败，已自动切换到“${candidate.name}”")
+                    return
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    markUnhealthy(candidate.id)
+                    Log.d(
+                        "SwiftWindHealth",
+                        "heartbeat failover candidate failed: ${candidate.name}"
+                    )
+                }
+            }
+
+            // 所有备用线路都失败后，若仍残留 Connected 状态，主动拆掉，
+            // 不能让界面继续显示一个已经被证实无法传输数据的连接。
+            TunnelController.failCurrentConnection(
+                "当前节点无法传输数据，备用线路也不可用，请重新连接",
+                generation
+            )
+            notify("当前节点无法传输数据，备用线路也不可用，请重新连接")
+        } finally {
+            heartbeatFailoverInProgress = false
+            _ui.update { it.copy(busy = false) }
+        }
     }
 
     private fun effectiveHealthFor(id: String, now: Long = System.currentTimeMillis()): NodeHealth {

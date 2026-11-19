@@ -196,7 +196,7 @@ fun NodesScreen(
             Box(Modifier.weight(1f)) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().clipToBounds(),
-                    contentPadding = PaddingValues(bottom = 34.dp),
+                    contentPadding = PaddingValues(bottom = 52.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(ui.nodes, key = { it.id }) { node ->
@@ -220,7 +220,7 @@ fun NodesScreen(
                     Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .height(18.dp)
+                        .height(38.dp)
                         .background(
                             Brush.verticalGradient(
                                 listOf(Color.Transparent, Color(0xFF0B0710))
