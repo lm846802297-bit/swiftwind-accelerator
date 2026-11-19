@@ -12,6 +12,19 @@ sealed interface VpnState {
 
 enum class NodeHealth { UNKNOWN, CHECKING, OK, FAIL }
 
+/** 体检标签有效期：超过后视为未知，不能继续参与选线和握手超时判断。 */
+const val NODE_HEALTH_TTL_MS = 10 * 60 * 1000L
+
+fun effectiveHealth(
+    health: NodeHealth?,
+    checkedAt: Long?,
+    now: Long = System.currentTimeMillis()
+): NodeHealth {
+    if (checkedAt == null) return NodeHealth.UNKNOWN
+    if (now - checkedAt > NODE_HEALTH_TTL_MS) return NodeHealth.UNKNOWN
+    return health ?: NodeHealth.UNKNOWN
+}
+
 /**
  * 一次真机体检的结果。
  * handshakeMs：从拉起隧道到检测到 WireGuard 握手的耗时；

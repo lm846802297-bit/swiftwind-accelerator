@@ -59,6 +59,8 @@ import androidx.compose.ui.unit.sp
 import com.swiftwind.accelerator.data.Node
 import com.swiftwind.accelerator.data.NodeSource
 import com.swiftwind.accelerator.vpn.NodeHealth
+import com.swiftwind.accelerator.vpn.NODE_HEALTH_TTL_MS
+import com.swiftwind.accelerator.vpn.effectiveHealth
 import com.swiftwind.accelerator.ui.theme.Danger
 import com.swiftwind.accelerator.ui.theme.Mint
 import com.swiftwind.accelerator.ui.theme.Pink
@@ -73,8 +75,6 @@ import com.swiftwind.accelerator.viewmodel.ProbeProgress
 import com.swiftwind.accelerator.viewmodel.UiState
 import com.swiftwind.accelerator.vpn.VpnState
 import kotlinx.coroutines.delay
-
-private const val HEALTH_TTL_MS = 10 * 60 * 1000L
 
 @Composable
 fun NodesScreen(
@@ -96,7 +96,7 @@ fun NodesScreen(
     val lastChecked = ui.nodes.mapNotNull { ui.healthCheckedAt[it.id] }.maxOrNull()
     val staleCount = ui.nodes.count { node ->
         val checkedAt = ui.healthCheckedAt[node.id] ?: return@count false
-        now - checkedAt > HEALTH_TTL_MS
+        now - checkedAt > NODE_HEALTH_TTL_MS
     }
     LaunchedEffect(Unit) {
         while (true) {
@@ -105,6 +105,14 @@ fun NodesScreen(
         }
     }
     val nodeActionsEnabled = !ui.busy &&
+        ui.vpnState !is VpnState.Connecting &&
+        ui.vpnState !is VpnState.Disconnecting
+    val canFetchWarp = !ui.busy &&
+        ui.vpnState !is VpnState.Connected &&
+        ui.vpnState !is VpnState.Connecting &&
+        ui.vpnState !is VpnState.Disconnecting
+    val canProbe = !ui.busy && ui.nodes.isNotEmpty() &&
+        ui.vpnState !is VpnState.Connected &&
         ui.vpnState !is VpnState.Connecting &&
         ui.vpnState !is VpnState.Disconnecting
 
@@ -124,7 +132,7 @@ fun NodesScreen(
         )
 
         Spacer(Modifier.height(18.dp))
-        WarpCard(busy = ui.busy, onFetch = onFetchWarp)
+        WarpCard(busy = ui.busy, enabled = canFetchWarp, onFetch = onFetchWarp)
 
         Spacer(Modifier.height(20.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -137,7 +145,7 @@ fun NodesScreen(
             Spacer(Modifier.weight(1f))
             TextButton(
                 onClick = onProbe,
-                enabled = !ui.busy && ui.nodes.isNotEmpty()
+                enabled = canProbe
             ) {
                 if (ui.busy) {
                     CircularProgressIndicator(
@@ -149,7 +157,7 @@ fun NodesScreen(
                     Icon(
                         Icons.Rounded.Speed,
                         contentDescription = null,
-                        tint = Pink,
+                        tint = if (canProbe) Pink else TextSecondary,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -159,7 +167,7 @@ fun NodesScreen(
                         ui.busy -> "处理中"
                         else -> "一键体检"
                     },
-                    color = if (ui.nodes.isEmpty()) TextSecondary else Pink,
+                    color = if (canProbe) Pink else TextSecondary,
                     modifier = Modifier.padding(start = 5.dp)
                 )
             }
@@ -193,11 +201,7 @@ fun NodesScreen(
                 ) {
                     items(ui.nodes, key = { it.id }) { node ->
                         val checkedAt = ui.healthCheckedAt[node.id]
-                        val health = if (checkedAt != null && now - checkedAt > HEALTH_TTL_MS) {
-                            NodeHealth.UNKNOWN
-                        } else {
-                            ui.health[node.id] ?: NodeHealth.UNKNOWN
-                        }
+                        val health = effectiveHealth(ui.health[node.id], checkedAt, now)
                         NodeRow(
                             node = node,
                             selected = node.id == ui.selectedId,
@@ -400,7 +404,7 @@ private fun ProbeProgressCard(progress: ProbeProgress, onCancel: () -> Unit) {
 }
 
 @Composable
-private fun WarpCard(busy: Boolean, onFetch: () -> Unit) {
+private fun WarpCard(busy: Boolean, enabled: Boolean, onFetch: () -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -439,7 +443,7 @@ private fun WarpCard(busy: Boolean, onFetch: () -> Unit) {
             }
             Button(
                 onClick = onFetch,
-                enabled = !busy,
+                enabled = enabled && !busy,
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Pink,
@@ -472,7 +476,7 @@ private fun NodeRow(
     onSelect: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val expired = checkedAt != null && now - checkedAt > HEALTH_TTL_MS
+    val expired = checkedAt != null && now - checkedAt > NODE_HEALTH_TTL_MS
     Surface(
         modifier = Modifier
             .fillMaxWidth()

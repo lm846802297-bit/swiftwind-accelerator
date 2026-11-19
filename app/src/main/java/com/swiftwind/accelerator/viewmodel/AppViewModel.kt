@@ -19,6 +19,7 @@ import com.swiftwind.accelerator.vpn.TunnelController
 import com.swiftwind.accelerator.vpn.TunnelStats
 import com.swiftwind.accelerator.vpn.VpnState
 import com.swiftwind.accelerator.vpn.NodeHealth
+import com.swiftwind.accelerator.vpn.effectiveHealth
 import com.swiftwind.accelerator.vpn.NodeQuality
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +78,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // connect() 在真正进入 Connecting 状态前有一小段异步窗口；
     // 用 Job 做同步闸门，避免快速双击时两条连接协程互相覆盖状态。
     private var connectJob: Job? = null
+    private var disconnectJob: Job? = null
 
     private val connectivityManager = application.applicationContext
         .getSystemService(ConnectivityManager::class.java)
@@ -87,6 +89,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // 否则 App 启动后系统补发初始网络回调时，会在已连接状态下误触发一次重连。
     private var networkReconnectArmed = false
     private var networkReconnectJob: Job? = null
+    // 网络事件时间和用户最近一次主动连接操作时间，用于避免
+    // 用户在切节点完成后又被一次旧的网络回调触发冗余重连。
+    private var networkChangeEventAt = 0L
+    private var lastUserConnectionActionAt = 0L
 
     init {
         val nodes = NodeStore.loadNodes()
@@ -195,6 +201,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val total = nodes.size
+        val previousHealth = _ui.value.health
+        val previousHealthCheckedAt = _ui.value.healthCheckedAt
+        val previousQuality = _ui.value.quality
         _ui.update {
             it.copy(
                 busy = true,
@@ -285,7 +294,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     notify("体检完成：$available/${nodes.size} 条线路可用")
                 }
             } catch (t: CancellationException) {
-                notify("已取消体检")
+                // 取消体检不应把之前已经测出的结果一起丢掉；用户只是中止了本次刷新。
+                _ui.update {
+                    it.copy(
+                        health = previousHealth,
+                        healthCheckedAt = previousHealthCheckedAt,
+                        quality = previousQuality
+                    )
+                }
+                notify(
+                    if (previousHealthCheckedAt.isNotEmpty()) {
+                        "已取消体检，保留上次结果"
+                    } else {
+                        "已取消体检"
+                    }
+                )
                 throw t
             } catch (t: Throwable) {
                 notify("体检异常：${TunnelController.mapError(t)}")
@@ -420,6 +443,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         networkReconnectJob?.cancel()
         networkReconnectJob = null
+        lastUserConnectionActionAt = SystemClock.elapsedRealtime()
         when (currentState) {
             is VpnState.Connected -> {
                 // 已连接时先真正切换隧道，成功后再落选中项，避免 UI 与隧道不一致。
@@ -431,7 +455,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         // 已知不可用的线路用更短的握手窗口，失败时更快回到原节点；
                         // 未测/可用线路保留 1.2 秒，避免误杀刚恢复的节点。
-                        val targetHealth = _ui.value.health[node.id]
+                        val targetHealth = effectiveHealthFor(node.id)
                         val targetHandshakeMs =
                             if (targetHealth == NodeHealth.FAIL) 1000L else 1200L
                         TunnelController.connect(
@@ -447,6 +471,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             "switch success +${SystemClock.elapsedRealtime() - switchStartedAt}ms"
                         )
                     } catch (t: Throwable) {
+                        if (t is CancellationException) throw t
                         markUnhealthy(id)
                         val originalError = TunnelController.mapError(t)
                         Log.d(
@@ -511,9 +536,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             else -> Unit
         }
         _ui.update { it.copy(busy = true) }
+        val wasSelected = _ui.value.selectedId == id
+        if (wasSelected) lastUserConnectionActionAt = SystemClock.elapsedRealtime()
         viewModelScope.launch {
             try {
-                val wasSelected = _ui.value.selectedId == id
                 if (wasSelected && TunnelController.state.value is VpnState.Connected) {
                     try {
                         TunnelController.disconnect()
@@ -567,6 +593,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         networkReconnectJob?.cancel()
         networkReconnectJob = null
+        lastUserConnectionActionAt = SystemClock.elapsedRealtime()
         // 在启动协程前同步占位，避免“点连接后立刻切换节点/删除节点”抢在
         // TunnelController 进入 Connecting 之前改掉选中项或节点列表。
         _ui.update { it.copy(busy = true) }
@@ -620,18 +647,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun failoverCandidates(start: Node, attempted: Set<String>): List<Node> {
         if (start.source != NodeSource.WARP) return emptyList()
-        val health = _ui.value.health
         val quality = _ui.value.quality
+        val now = System.currentTimeMillis()
         return _ui.value.nodes
             .filter { it.source == NodeSource.WARP && it.id !in attempted }
             .sortedWith(
                 compareByDescending<Node> {
-                    when (health[it.id]) {
+                    when (effectiveHealthFor(it.id, now)) {
                         NodeHealth.OK -> 3
                         NodeHealth.UNKNOWN -> 2
                         NodeHealth.CHECKING -> 1
                         NodeHealth.FAIL -> 0
-                        null -> 2
                     }
                 }.thenByDescending { quality[it.id]?.score ?: 0 }
             )
@@ -677,6 +703,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
                 if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
                 val added = synchronized(underlyingNetworks) { underlyingNetworks.add(network) }
+                if (added) {
+                    networkChangeEventAt = SystemClock.elapsedRealtime()
+                }
                 if (added && networkMonitorReady && networkReconnectArmed) {
                     scheduleNetworkReconnect()
                 }
@@ -685,6 +714,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             override fun onLost(network: Network) {
                 val removed = synchronized(underlyingNetworks) { underlyingNetworks.remove(network) }
                 if (!removed) return
+                networkChangeEventAt = SystemClock.elapsedRealtime()
                 // 记录“网络确实断过一次”，之后新网络出现时才执行重连。
                 networkReconnectArmed = true
                 val hasNetwork = synchronized(underlyingNetworks) { underlyingNetworks.isNotEmpty() }
@@ -716,9 +746,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val node = _ui.value.selectedNode ?: return@launch
             if (networkReconnectJob?.isActive == true) return@launch
             networkReconnectJob = launch reconnect@{
+                val eventAt = networkChangeEventAt
                 try {
                     // 网络切换后系统 VPN 的底层 socket 需要一点时间稳定，避免刚切就握手。
                     delay(1200L)
+                    if (lastUserConnectionActionAt > eventAt) return@reconnect
                     if (TunnelController.state.value !is VpnState.Connected) return@reconnect
                     notify("网络已切换，正在重连…")
                     val result = connectWithFailover(node, allowWarpFailover = true)
@@ -746,15 +778,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        if (_ui.value.busy || disconnectJob?.isActive == true) return
         if (networkReconnectJob?.isActive == true) {
             notify("正在恢复网络连接，请稍后再断开")
             return
         }
+        when (TunnelController.state.value) {
+            is VpnState.Connecting, is VpnState.Disconnecting -> return
+            else -> Unit
+        }
         networkReconnectJob?.cancel()
         networkReconnectJob = null
-        viewModelScope.launch {
-            runCatching { TunnelController.disconnect() }
-                .onFailure { notify(TunnelController.mapError(it)) }
+        lastUserConnectionActionAt = SystemClock.elapsedRealtime()
+        // 先同步占用 busy，避免“点断开后立刻再点连接 / 切节点”在
+        // TunnelController 真正进入 Disconnecting 之前抢状态。
+        _ui.update { it.copy(busy = true) }
+        disconnectJob = viewModelScope.launch {
+            try {
+                runCatching { TunnelController.disconnect() }
+                    .onFailure { notify(TunnelController.mapError(it)) }
+            } finally {
+                if (disconnectJob === coroutineContext[Job]) disconnectJob = null
+                _ui.update { it.copy(busy = false) }
+            }
         }
     }
 
@@ -791,6 +837,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopStatsPolling() {
         statsJob?.cancel()
         statsJob = null
+    }
+
+    private fun effectiveHealthFor(id: String, now: Long = System.currentTimeMillis()): NodeHealth {
+        val state = _ui.value
+        return effectiveHealth(state.health[id], state.healthCheckedAt[id], now)
     }
 
     private fun markUnhealthy(id: String) {

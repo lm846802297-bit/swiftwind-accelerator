@@ -17,10 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.Icon
@@ -84,7 +84,7 @@ fun SettingsScreen(
                 )
                 RowDivider()
                 SettingRow(
-                    icon = Icons.Rounded.OpenInNew,
+                    icon = Icons.AutoMirrored.Rounded.OpenInNew,
                     title = "系统 VPN 设置",
                     subtitle = "可在系统中开启「始终开启 VPN」",
                     onClick = onOpenVpnSettings,
@@ -191,7 +191,7 @@ private fun SettingRow(
         }
         if (showArrow) {
             Icon(
-                Icons.Rounded.OpenInNew,
+                Icons.AutoMirrored.Rounded.OpenInNew,
                 contentDescription = null,
                 tint = TextSecondary,
                 modifier = Modifier.size(16.dp)

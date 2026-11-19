@@ -1,5 +1,6 @@
 package com.swiftwind.accelerator.vpn
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
@@ -8,6 +9,7 @@ import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.BadConfigException
 import com.wireguard.config.Config
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -44,6 +46,8 @@ object TunnelController {
         .retryOnConnectionFailure(false)
         .build()
 
+    // GoBackend 是进程级单例，内部只持有 applicationContext，不存在 Activity 泄漏。
+    @SuppressLint("StaticFieldLeak")
     private lateinit var backend: GoBackend
     private lateinit var appContext: Context
     private var startedAt = 0L
@@ -110,6 +114,9 @@ object TunnelController {
         handshakeTimeoutMs: Long = 2000L,
         stabilityMs: Long = 1200L
     ) = withContext(Dispatchers.IO) {
+        // 先把配置解析完再进入 Connecting：配置无效时保持原状态，
+        // 不能因为旧隧道还在运行就把一个根本没用上的节点显示成“已连接”。
+        val config: Config = Config.parse(BufferedReader(StringReader(configText)))
         synchronized(operationGate) {
             if (probing) throw IllegalStateException("正在体检节点，请稍后再连接")
             when (_state.value) {
@@ -121,7 +128,6 @@ object TunnelController {
         }
         try {
             val connectStartedAt = SystemClock.elapsedRealtime()
-            val config: Config = Config.parse(BufferedReader(StringReader(configText)))
             // 用 backend 当前是否已有隧道来判断首次连接还是“已连接状态下切换节点”。
             val hadTunnel = isRunning()
             Log.d("SwiftWindSwitch", "connect start hadTunnel=$hadTunnel")
@@ -164,6 +170,7 @@ object TunnelController {
             updateState(VpnState.Connected)
             Log.d("SwiftWindSwitch", "connect done +${SystemClock.elapsedRealtime() - connectStartedAt}ms")
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             if (_state.value is VpnState.Error) throw t
             // GoBackend 在切换配置失败时会尝试恢复旧隧道。这里不能只看“有隧道在跑”
             // 就直接报已连接：新建的隧道也可能残留在运行但根本不通。
@@ -299,10 +306,13 @@ object TunnelController {
                     return@withContext ProbeResult(healthy = false)
                 }
                 val speed = measureSpeed()
-                // 只有握手成功还不够：必须真的通过隧道收到测速数据，否则会把
+                // 测速接口可能被运营商/网络单独拦截，但隧道本身仍能上网。
+                // 测速为 0 时补一次极小请求，避免把可用节点误标成“不可用”。
+                val dataOk = speed.second > 0 || verifyTraffic()
+                // 只有握手成功还不够：必须真的通过隧道收到应用层数据，否则会把
                 // “能握手但无法上网”的节点误标为可用。
                 ProbeResult(
-                    healthy = speed.second > 0,
+                    healthy = dataOk,
                     handshakeMs = handshakeMs,
                     httpLatencyMs = speed.first,
                     throughputKbps = speed.second
@@ -340,17 +350,30 @@ object TunnelController {
     }
 
     /** 通过隧道请求一个极小页面，确认握手后真的能收到应用层数据。 */
-    private fun verifyTraffic(): Boolean = runCatching {
+    private suspend fun verifyTraffic(): Boolean = suspendCancellableCoroutine { cont ->
         val request = Request.Builder()
             .url(VERIFY_URL)
             .header("User-Agent", "SwiftWind/1.0")
             .build()
-        verifyClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return@use false
-            val body = response.body?.string() ?: return@use false
-            body.isNotBlank()
-        }
-    }.getOrDefault(false)
+        val call = verifyClient.newCall(request)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (cont.isActive) cont.resume(false)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val ok = runCatching {
+                    response.use { resp ->
+                        if (!resp.isSuccessful) return@use false
+                        val body = resp.body?.string() ?: return@use false
+                        body.isNotBlank()
+                    }
+                }.getOrDefault(false)
+                if (cont.isActive) cont.resume(ok)
+            }
+        })
+    }
 
     /**
      * 隧道内下载 256KB 样本，返回（首字节延迟 ms，吞吐 kbps）。

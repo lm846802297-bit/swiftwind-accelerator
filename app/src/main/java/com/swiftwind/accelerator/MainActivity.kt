@@ -30,11 +30,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private var afterNotificationPermission: (() -> Unit)? = null
     private var pendingProbe = false
+    private var pendingConnectAfterNotification = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashLogger.install(this)
         pendingProbe = savedInstanceState?.getBoolean(KEY_PENDING_PROBE) ?: false
+        pendingConnectAfterNotification =
+            savedInstanceState?.getBoolean(KEY_PENDING_CONNECT_AFTER_NOTIFICATION) ?: false
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         vpnPermissionLauncher = registerForActivityResult(
@@ -64,8 +67,17 @@ class MainActivity : ComponentActivity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
-            afterNotificationPermission?.invoke()
+            val pendingConnect = pendingConnectAfterNotification
+            pendingConnectAfterNotification = false
+            val action = afterNotificationPermission
             afterNotificationPermission = null
+            if (action != null) {
+                action()
+            } else if (pendingConnect) {
+                // Activity 在权限弹窗期间被重建时，lambda 无法跨进程保存，
+                // 只恢复一个布尔标记，回到这里再继续申请 VPN 权限。
+                requestVpnAndConnect()
+            }
         }
 
         setContent {
@@ -85,6 +97,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(KEY_PENDING_PROBE, pendingProbe)
+        outState.putBoolean(
+            KEY_PENDING_CONNECT_AFTER_NOTIFICATION,
+            pendingConnectAfterNotification
+        )
         super.onSaveInstanceState(outState)
     }
 
@@ -108,6 +124,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         afterNotificationPermission = then
+        pendingConnectAfterNotification = true
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
@@ -157,6 +174,7 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val KEY_PENDING_PROBE = "pending_probe"
+        const val KEY_PENDING_CONNECT_AFTER_NOTIFICATION = "pending_connect_after_notification"
         const val PRIVACY_URL = "https://aka.doubaocdn.com/s/9EX5YNoJts"
     }
 }
